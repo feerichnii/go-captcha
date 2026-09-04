@@ -32,6 +32,7 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 - **Safer-by-default answers** — `GetPublicData()` returns everything the browser needs and nothing it shouldn't. The real answer (`GetData()`) never has to leave the server, and can be sealed into an opaque HMAC token via [`v2/base/challenge`](v2).
 - **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get decoy shadows and edge jitter, rotate masters get rim noise, and click thumbnails are deformed by default. See [SECURITY.md](SECURITY.md).
 - **The `antibot` layer** — a drop-in orchestration package ([`v2/antibot`](v2/antibot)) that manages the challenge lifecycle (crypto ID, TTL, single-use, attempt caps), scores pointer trajectories, rate-limits per client, and issues adaptive proof-of-work to suspicious clients. Backed by in-memory or Redis storage.
+- **Bundled high-complexity backgrounds** — a fresh set of dense, high-entropy background images ships under [`v2/resources/backgrounds`](v2/resources/backgrounds), so masters are harder to segment for OCR/contour-based solvers out of the box.
 
 | Capability            | Upstream | AntiBot Edition |
 |-----------------------|:--------:|:---------------:|

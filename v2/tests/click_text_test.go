@@ -32,7 +32,7 @@ func init() {
 		log.Fatalln(err)
 	}
 
-	bgImage, err := loadPng("../.cache/bg.png")
+	bgImage, err := loadPng("../resources/backgrounds/bg_foliage.png")
 	if err != nil {
 		log.Fatalln(err)
 	}

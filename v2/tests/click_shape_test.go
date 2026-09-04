@@ -28,12 +28,12 @@ func init() {
 		click.WithRangeThumbBgDistort(1),
 	)
 
-	bgImage, err := loadPng("../.cache/bg.png")
+	bgImage, err := loadPng("../resources/backgrounds/bg_mosaic.png")
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	bgImage1, err := loadPng("../.cache/bg1.png")
+	bgImage1, err := loadPng("../resources/backgrounds/bg_graffiti.png")
 	if err != nil {
 		log.Fatalln(err)
 	}

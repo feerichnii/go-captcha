@@ -33,6 +33,7 @@
 - **默认更安全的答案处理** —— `GetPublicData()` 只返回浏览器所需、且不含答案的元数据；真实答案（`GetData()`）无需离开服务端，也可通过 [`v2/base/challenge`](v2) 密封为不透明的 HMAC 令牌。
 - **抗破解的图像与随机数加固** —— 答案坐标改用 `crypto/rand` 生成，JPEG 主图叠加干扰噪点，滑块加入诱饵阴影与边缘抖动，旋转主图加入圆环噪点，点选缩略图默认形变。详见 [SECURITY.md](SECURITY.md)。
 - **`antibot` 编排层** —— 开箱即用的编排包（[`v2/antibot`](v2/antibot)），负责挑战生命周期（加密 ID、TTL、单次使用、尝试次数上限）、指针轨迹评分、按客户端限流，并对可疑客户端下发自适应 PoW。支持内存或 Redis 存储。
+- **内置高复杂度背景图** —— 在 [`v2/resources/backgrounds`](v2/resources/backgrounds) 内置了一组高熵、细节密集的全新背景图，让主图默认就更难被 OCR/轮廓类自动化程序分割识别。
 
 > 直接跳转到 [AntiBot 反自动化层](#-antibot-反自动化层) 或完整的 [安全说明](SECURITY.md)。
 
