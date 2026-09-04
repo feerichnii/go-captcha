@@ -28,7 +28,6 @@ func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{data: make(map[string]*memItem)}
 }
 
-// sweepLocked amortizes expiry cleanup: full sweep every 256 mutating ops.
 func (m *MemoryStore) sweepLocked(now time.Time) {
 	m.ops++
 	if m.ops%256 != 0 {
@@ -98,7 +97,11 @@ func (m *MemoryStore) Delete(_ context.Context, key string) error {
 	return nil
 }
 
-func (m *MemoryStore) Incr(_ context.Context, key string, ttl time.Duration) (int64, error) {
+func (m *MemoryStore) Incr(ctx context.Context, key string, ttl time.Duration) (int64, error) {
+	return m.IncrBy(ctx, key, 1, ttl)
+}
+
+func (m *MemoryStore) IncrBy(_ context.Context, key string, delta int64, ttl time.Duration) (int64, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now()
@@ -111,6 +114,9 @@ func (m *MemoryStore) Incr(_ context.Context, key string, ttl time.Duration) (in
 		}
 		m.data[key] = it
 	}
-	it.counter++
+	it.counter += delta
+	if it.counter < 0 {
+		it.counter = 0
+	}
 	return it.counter, nil
 }

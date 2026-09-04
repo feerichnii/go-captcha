@@ -58,7 +58,16 @@ test("AntiBotClient issue→verify solves PoW and posts expected shape", async (
     const body = JSON.parse(init.body);
     calls.push({ url, body });
     if (url === "/issue") {
-      return { ok: true, status: 200, text: async () => JSON.stringify({ id: "c1", pow: { salt, difficulty: 8 } }) };
+      return {
+        ok: true,
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            id: "c1",
+            pow: { salt, difficulty: 8 },
+            js_challenge: { nonce: "aa".repeat(16), probe: "languages.length" },
+          }),
+      };
     }
     return { ok: true, status: 200, text: async () => "{}" };
   };
@@ -71,4 +80,41 @@ test("AntiBotClient issue→verify solves PoW and posts expected shape", async (
   assert.deepEqual(v.answer, { x: 1, y: 2 });
   assert.equal(v.trajectory.points.length, 1);
   assert.equal(await verifyPoW(salt, v.pow_nonce, 8), true);
+  assert.ok(v.browser);
+  assert.ok(typeof v.browser.js_challenge_response === "string" && v.browser.js_challenge_response.length === 64);
+});
+
+test("solveJSChallenge matches ExpectedJSResponse contract", async () => {
+  const { solveJSChallenge } = await import("./antibot-client.js");
+  const nonce = "00112233445566778899aabbccddeeff";
+  const hex = await solveJSChallenge({ nonce, probe: "languages.length" }, { languages: ["en", "fr"] });
+  const h = createHash("sha256").update(`${nonce}|2`).digest("hex");
+  assert.equal(hex, h);
+});
+
+test("TrajectoryTracker records pointer meta when present", () => {
+  const listeners = {};
+  const el = {
+    addEventListener: (n, fn) => (listeners[n] = fn),
+    removeEventListener: (n) => delete listeners[n],
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+  };
+  const tr = new TrajectoryTracker(el, { maxPoints: 10, maxEvents: 10, minIntervalMs: 0 }).start();
+  // Node has no PointerEvent, so the tracker listens for mouse/touch names.
+  listeners.mousedown({
+    type: "mousedown",
+    clientX: 1,
+    clientY: 2,
+    pointerType: "mouse",
+    pointerId: 1,
+    buttons: 1,
+    pressure: 0.5,
+    isPrimary: true,
+    getCoalescedEvents: () => [{}, {}],
+  });
+  tr.stop();
+  const p = tr.snapshot().points[0];
+  assert.equal(p.pointer_type, "mouse");
+  assert.equal(p.buttons, 1);
+  assert.equal(p.coalesced, 2);
 });

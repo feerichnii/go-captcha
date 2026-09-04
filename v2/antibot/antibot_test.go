@@ -1,6 +1,7 @@
 package antibot
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,13 @@ func (c *fakeClock) advance(d time.Duration) {
 func newLayer(t *testing.T, cfg Config) (*Layer, *fakeClock) {
 	t.Helper()
 	cfg.SecretKey = testKey
+	// Deterministic PoW for unit tests unless the test opts in.
+	if cfg.PoWProbeProb == 0 {
+		cfg.PoWProbeProb = -1
+	}
+	if cfg.PoWJitterBits == 0 {
+		cfg.PoWJitterBits = -1
+	}
 	l, err := New(NewMemoryStore(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -49,11 +57,20 @@ func humanTrajectory() Trajectory {
 	pts := make([]Point, 0, 25)
 	t0 := int64(1_000)
 	x, y := 10.0, 100.0
+	primary := true
 	for i := 0; i < 25; i++ {
 		t0 += int64(16 + i%7)
 		x += 3 + float64(i%3)
 		y += float64((i%5)-2) * 0.4
-		pts = append(pts, Point{X: x, Y: y, T: t0})
+		coalesced := 0
+		if i > 0 && i%3 == 0 {
+			coalesced = 2
+		}
+		pts = append(pts, Point{
+			X: x, Y: y, T: t0,
+			PointerType: "mouse", PointerID: 1, Buttons: 1, Pressure: 0.5,
+			IsPrimary: &primary, Coalesced: coalesced,
+		})
 	}
 	return Trajectory{Points: pts, Events: []string{"pointerdown", "pointermove", "pointerup"}}
 }
@@ -89,6 +106,113 @@ func issueSlide(t *testing.T, l *Layer, clk *fakeClock, client string) *IssueRes
 func TestNewRequiresSecret(t *testing.T) {
 	if _, err := New(NewMemoryStore(), Config{}); !errors.Is(err, ErrNoSecretKey) {
 		t.Fatalf("want ErrNoSecretKey, got %v", err)
+	}
+}
+
+func TestWeakSecretKeyRejected(t *testing.T) {
+	if _, err := New(NewMemoryStore(), Config{SecretKey: []byte("short")}); !errors.Is(err, ErrWeakSecretKey) {
+		t.Fatalf("want ErrWeakSecretKey, got %v", err)
+	}
+	if _, err := New(NewMemoryStore(), Config{SecretKey: bytes.Repeat([]byte("a"), 32)}); !errors.Is(err, ErrWeakSecretKey) {
+		t.Fatalf("want ErrWeakSecretKey for low-entropy, got %v", err)
+	}
+}
+
+func TestClientKeyRejectsIP(t *testing.T) {
+	l, _ := newLayer(t, Config{})
+	ctx := context.Background()
+	ans := mustJSON(slide.Block{X: 1, Y: 1})
+	for _, key := range []string{"1.2.3.4", "1.2.3.4:5678", "ip:10.0.0.1", "[::1]:443"} {
+		if _, err := l.Issue(ctx, IssueRequest{Kind: KindSlide, Answer: ans, ClientKey: key}); !errors.Is(err, ErrClientKeyLooksLikeIP) {
+			t.Fatalf("%q: want ErrClientKeyLooksLikeIP, got %v", key, err)
+		}
+	}
+}
+
+func TestSessionCookieRoundTrip(t *testing.T) {
+	sess, cookie, err := MintSession(testKey, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if LooksLikeIP(sess.ClientKey) || sess.ClientKey == "" {
+		t.Fatalf("bad client key: %q", sess.ClientKey)
+	}
+	got, err := ParseSession(testKey, cookie, time.Hour)
+	if err != nil || got.ClientKey != sess.ClientKey {
+		t.Fatalf("got=%+v err=%v", got, err)
+	}
+}
+
+func TestValidateTrajectoryOrderAndJumps(t *testing.T) {
+	ok := humanTrajectory()
+	iss := ValidateTrajectory(ok, 800)
+	if iss.Suspicious() {
+		t.Fatalf("human should be structurally ok: %+v", iss)
+	}
+	bad := Trajectory{Points: []Point{{X: 0, Y: 0, T: 1}, {X: 0, Y: 0, T: 2}, {X: 0, Y: 0, T: 1}}}
+	iss = ValidateTrajectory(bad, 800)
+	if !iss.NonMonotonicTime {
+		t.Fatal("expected non-monotonic")
+	}
+	jump := Trajectory{
+		Points: []Point{{X: 0, Y: 0, T: 1}, {X: 900, Y: 0, T: 2}, {X: 901, Y: 0, T: 3}},
+		Events: []string{"pointerdown", "pointermove", "pointerup"},
+	}
+	iss = ValidateTrajectory(jump, 800)
+	if !iss.HugeJump {
+		t.Fatal("expected huge jump")
+	}
+}
+
+func TestJSChallengeRoundTrip(t *testing.T) {
+	ch, err := NewJSChallenge()
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp := ExpectedJSResponse(ch.Nonce, "2")
+	if !CheckJSChallenge(ch, resp, "2") {
+		t.Fatal("expected match")
+	}
+	if CheckJSChallenge(ch, "deadbeef", "2") {
+		t.Fatal("wrong response must fail")
+	}
+}
+
+func TestMaxRiskLevelReachesPoWMax(t *testing.T) {
+	cfg := Config{
+		SecretKey:         testKey,
+		PoWBaseDifficulty: 14,
+		PoWStepPerLevel:   2,
+		PoWMaxDifficulty:  22,
+		PoWProbeProb:      -1,
+		PoWJitterBits:     -1,
+	}
+	cfg = cfg.withDefaults()
+	if cfg.powDifficultyFor(cfg.MaxRiskLevel) != cfg.PoWMaxDifficulty {
+		t.Fatalf("MaxRiskLevel=%d yields diff %d, want %d",
+			cfg.MaxRiskLevel, cfg.powDifficultyFor(cfg.MaxRiskLevel), cfg.PoWMaxDifficulty)
+	}
+}
+
+func TestAtomicRiskBump(t *testing.T) {
+	l, _ := newLayer(t, Config{MaxRiskLevel: 5})
+	ctx := context.Background()
+	hash := hashClient("sid:risk-test")
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = l.bumpRisk(ctx, hash, 1)
+		}()
+	}
+	wg.Wait()
+	n, err := l.riskLevel(ctx, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 {
+		t.Fatalf("want clamped 5, got %d", n)
 	}
 }
 
