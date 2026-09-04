@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"time"
 
 	"github.com/feerichnii/go-captcha/v2/base/challenge"
@@ -34,10 +33,13 @@ func WithChecker(c AnswerChecker) Option {
 	}
 }
 
-// New creates an AntiBot layer. Config.SecretKey is required.
+// New creates an AntiBot layer. Config.SecretKey must be >= 32 high-entropy bytes.
 func New(store Store, cfg Config, opts ...Option) (*Layer, error) {
 	if len(cfg.SecretKey) == 0 {
 		return nil, ErrNoSecretKey
+	}
+	if err := ValidateSecretKey(cfg.SecretKey); err != nil {
+		return nil, err
 	}
 	if store == nil {
 		store = NewMemoryStore()
@@ -59,9 +61,14 @@ type IssueRequest struct {
 	Kind string // click | slide | rotate
 	// Answer is json of GetData() — server only; encrypted at rest.
 	Answer json.RawMessage
-	// ClientKey binds the challenge to a session / client (required).
-	// Use a session id when available; fall back to IP + UA hash.
+	// ClientKey binds the challenge to a server-issued session id (required).
+	// Must NOT be an IP or IP:port — use MintSession / EnsureSessionCookie.
+	// Pass IP/UA via Signals instead.
 	ClientKey string
+	// Signals are optional side-channels (IP, UA, ASN, session age) for risk.
+	Signals ClientSignals
+	// Browser is optional client-reported environment hints (untrusted).
+	Browser BrowserSignals
 	// Suspicious forces at least risk level 1 (PoW) for this challenge.
 	Suspicious bool
 }
@@ -74,11 +81,12 @@ type PoWChallenge struct {
 
 // IssueResponse is safe to return to the client (no answer).
 type IssueResponse struct {
-	ID         string        `json:"id"`
-	ExpiresAt  int64         `json:"expires_at"` // unix seconds
-	TTLSeconds int64         `json:"ttl_seconds"`
-	PoW        *PoWChallenge `json:"pow,omitempty"`
-	RiskLevel  int           `json:"-"`
+	ID          string        `json:"id"`
+	ExpiresAt   int64         `json:"expires_at"` // unix seconds
+	TTLSeconds  int64         `json:"ttl_seconds"`
+	PoW         *PoWChallenge `json:"pow,omitempty"`
+	JSChallenge *JSChallenge  `json:"js_challenge,omitempty"`
+	RiskLevel   int           `json:"-"`
 }
 
 // VerifyRequest is the client solve payload.
@@ -88,6 +96,8 @@ type VerifyRequest struct {
 	Trajectory Trajectory
 	PoWNonce   string
 	ClientKey  string // must match the key used at Issue
+	Signals    ClientSignals
+	Browser    BrowserSignals
 }
 
 // VerifyResult is returned on successful verification.
@@ -104,7 +114,6 @@ type VerifyResult struct {
 
 func (l *Layer) challengeKey(id string) string { return l.cfg.KeyPrefix + "ch:" + id }
 func (l *Layer) attemptKey(id string) string   { return l.cfg.KeyPrefix + "att:" + id }
-func (l *Layer) riskKey(hash string) string    { return l.cfg.KeyPrefix + "risk:" + hash }
 
 func hashClient(clientKey string) string {
 	sum := sha256.Sum256([]byte(clientKey))
@@ -118,41 +127,23 @@ func wrapStore(err error) error {
 	return fmt.Errorf("%w: %v", ErrStore, err)
 }
 
-// RiskLevel returns the persistent risk level for a client key (0 = clean).
-func (l *Layer) RiskLevel(ctx context.Context, clientKey string) (int, error) {
-	return l.riskLevel(ctx, hashClient(clientKey))
-}
-
-func (l *Layer) riskLevel(ctx context.Context, hash string) (int, error) {
-	b, err := l.store.Get(ctx, l.riskKey(hash))
-	if errors.Is(err, ErrNotFound) {
-		return 0, nil
+func validateClientKey(key string) error {
+	if key == "" {
+		return ErrInvalidRequest
 	}
-	if err != nil {
-		return 0, wrapStore(err)
+	if LooksLikeIP(key) {
+		return ErrClientKeyLooksLikeIP
 	}
-	n, _ := strconv.Atoi(string(b))
-	return n, nil
-}
-
-func (l *Layer) setRiskLevel(ctx context.Context, hash string, level int) error {
-	if level < 0 {
-		level = 0
-	}
-	if level > l.cfg.MaxRiskLevel {
-		level = l.cfg.MaxRiskLevel
-	}
-	key := l.riskKey(hash)
-	if level == 0 {
-		return wrapStore(l.store.Delete(ctx, key))
-	}
-	return wrapStore(l.store.Set(ctx, key, []byte(strconv.Itoa(level)), l.cfg.RiskTTL))
+	return nil
 }
 
 // Issue stores a challenge and returns a public id (+ PoW when the client is risky).
 func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
-	if !validKind(req.Kind) || len(req.Answer) == 0 || req.ClientKey == "" {
+	if !validKind(req.Kind) || len(req.Answer) == 0 {
 		return nil, ErrInvalidRequest
+	}
+	if err := validateClientKey(req.ClientKey); err != nil {
+		return nil, err
 	}
 	if !json.Valid(req.Answer) {
 		return nil, ErrInvalidRequest
@@ -162,12 +153,24 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	}
 
 	hash := hashClient(req.ClientKey)
+	l.noteIssued(ctx, hash)
+
 	level, err := l.riskLevel(ctx, hash)
 	if err != nil {
 		return nil, err
 	}
 	if req.Suspicious && level < 1 {
 		level = 1
+	}
+	// Browser / UA signals at issue time can raise the effective level for PoW
+	// selection only (persistent risk is updated on Verify).
+	bDelta, _ := BrowserRisk(req.Browser, true /* JS not verifiable yet */)
+	if hints := FormatUAHint(req.Signals.UserAgent); len(hints) > 0 {
+		bDelta++
+	}
+	level += bDelta
+	if level > l.cfg.MaxRiskLevel {
+		level = l.cfg.MaxRiskLevel
 	}
 
 	id, err := challenge.NewID()
@@ -180,6 +183,11 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		return nil, err
 	}
 
+	jsCh, err := NewJSChallenge()
+	if err != nil {
+		return nil, err
+	}
+
 	now := l.now()
 	rec := &ChallengeRecord{
 		ID:          id,
@@ -188,10 +196,13 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		ClientHash:  hash,
 		CreatedAtMs: now.UnixMilli(),
 		ExpiresAtMs: now.Add(l.cfg.TTL).UnixMilli(),
+		JSNonce:     jsCh.Nonce,
+		JSProbe:     jsCh.Probe,
 	}
 
+	diff := l.cfg.choosePoW(level)
 	var powOut *PoWChallenge
-	if diff := l.cfg.powDifficultyFor(level); diff > 0 {
+	if diff > 0 {
 		salt, err := CreatePoW()
 		if err != nil {
 			return nil, err
@@ -218,21 +229,25 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	})
 
 	return &IssueResponse{
-		ID:         id,
-		ExpiresAt:  rec.ExpiresAtMs / 1000,
-		TTLSeconds: int64(l.cfg.TTL / time.Second),
-		PoW:        powOut,
-		RiskLevel:  level,
+		ID:          id,
+		ExpiresAt:   rec.ExpiresAtMs / 1000,
+		TTLSeconds:  int64(l.cfg.TTL / time.Second),
+		PoW:         powOut,
+		JSChallenge: &jsCh,
+		RiskLevel:   level,
 	}, nil
 }
 
 // Verify enforces rate limits, atomic attempt counting, client binding,
-// server-side timing, PoW and geometry; the challenge is consumed atomically
-// on success. Behavior score only adjusts the client's risk level unless
-// Config.HardRejectScore is set.
+// server-side timing, PoW, JS challenge and geometry; the challenge is consumed
+// atomically on success. Behavior score and browser signals adjust the client's
+// persistent risk level unless Config.HardRejectScore is set.
 func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, error) {
-	if !challenge.IsValidID(req.ID) || req.ClientKey == "" {
+	if !challenge.IsValidID(req.ID) {
 		return nil, ErrInvalidRequest
+	}
+	if err := validateClientKey(req.ClientKey); err != nil {
+		return nil, err
 	}
 	if len(req.Answer) == 0 || len(req.Answer) > l.cfg.MaxAnswerBytes || !json.Valid(req.Answer) {
 		return nil, ErrInvalidRequest
@@ -299,13 +314,39 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		return fail(ErrTooFast)
 	}
 
-	// 4. Proof-of-work (when the client was risky at issue time).
+	// 4. Proof-of-work (when attached at issue time — includes probe PoW).
 	if rec.PoWDiff > 0 && !VerifyPoW(rec.PoWSalt, req.PoWNonce, rec.PoWDiff, l.cfg.MaxNonceLen) {
+		l.recordFail(ctx, hash)
 		return fail(ErrPoWInvalid)
 	}
 
-	// 5. Behavior score → risk (computed before geometry so telemetry sees it on failures too).
-	sr := l.cfg.Scorer.Score(req.Trajectory, ScoreContext{ElapsedMs: elapsed})
+	// 5. JS / DOM challenge (when minted at issue).
+	// Missing response is soft (legacy clients); a wrong response raises risk.
+	jsOK := true
+	var extraBrowserReasons []string
+	if rec.JSNonce != "" {
+		if req.Browser.JSChallengeResponse == "" {
+			extraBrowserReasons = append(extraBrowserReasons, "js_challenge_skipped")
+		} else {
+			candidates := ProbeCandidates(req.Browser, rec.JSProbe)
+			jsOK = CheckJSChallenge(JSChallenge{Nonce: rec.JSNonce, Probe: rec.JSProbe}, req.Browser.JSChallengeResponse, candidates...)
+		}
+	}
+	bDelta, bReasons := BrowserRisk(req.Browser, jsOK)
+	bReasons = append(bReasons, extraBrowserReasons...)
+
+	// 6. Trajectory structure + behavior score.
+	issues := ValidateTrajectory(req.Trajectory, l.cfg.MaxJumpPx)
+	if rec.Kind == KindSlide {
+		var sub SlideSubmit
+		if json.Unmarshal(req.Answer, &sub) == nil {
+			if !FinalPointNear(req.Trajectory, float64(sub.X), float64(sub.Y), float64(l.cfg.SlidePadding)+40) {
+				issues.FinalFarFromAnswer = true
+				issues.add("final_far_from_answer")
+			}
+		}
+	}
+	sr := l.cfg.Scorer.Score(req.Trajectory, ScoreContext{ElapsedMs: elapsed, Issues: issues})
 	ev.Score, ev.Components, ev.TrajectoryConsistent = sr.Score, sr.Components, sr.Consistent
 
 	levelBefore, err := l.riskLevel(ctx, hash)
@@ -314,15 +355,18 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}
 	ev.RiskLevelBefore = levelBefore
 
-	// 6. Geometry.
+	// 7. Geometry.
 	plain, err := challenge.Decrypt(l.cfg.SecretKey, rec.Answer, []byte(rec.ID+":"+rec.Kind))
 	if err != nil {
 		return fail(fmt.Errorf("%w: answer decrypt: %v", ErrStore, err))
 	}
 	tol := Tolerance{Click: l.cfg.ClickPadding, Slide: l.cfg.SlidePadding, Rotate: l.cfg.RotatePadding}
 	if !l.checker(rec.Kind, plain, req.Answer, tol) {
-		levelAfter := l.adjustRisk(ctx, hash, levelBefore, sr, false)
-		ev.RiskLevelAfter = levelAfter
+		dec, _ := l.EvaluateRisk(ctx, hash, RiskInputs{
+			Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
+			Signals: req.Signals, Failed: true, NowMs: nowMs,
+		})
+		ev.RiskLevelAfter = dec.LevelAfter
 		if attempts >= int64(l.cfg.MaxAttempts) {
 			_ = l.store.Delete(ctx, chKey)
 			return fail(ErrMaxAttempts)
@@ -330,14 +374,20 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		return fail(ErrBadAnswer)
 	}
 
-	// 7. Consume atomically; exactly one concurrent correct submission wins.
+	// 8. Consume atomically; exactly one concurrent correct submission wins.
 	if _, err := l.store.GetDel(ctx, chKey); err != nil {
 		return fail(wrapStore(err))
 	}
 	_ = l.store.Delete(ctx, l.attemptKey(req.ID))
 
-	levelAfter := l.adjustRisk(ctx, hash, levelBefore, sr, true)
-	ev.RiskLevelAfter = levelAfter
+	dec, err := l.EvaluateRisk(ctx, hash, RiskInputs{
+		Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
+		Signals: req.Signals, Solved: true, NowMs: nowMs,
+	})
+	if err != nil {
+		return fail(err)
+	}
+	ev.RiskLevelAfter = dec.LevelAfter
 
 	if l.cfg.HardRejectScore > 0 && sr.Score < l.cfg.HardRejectScore {
 		return fail(ErrLowScore)
@@ -347,25 +397,7 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	return &VerifyResult{
 		Score:          sr.Score,
 		Risk:           1 - sr.Score,
-		RiskLevel:      levelAfter,
-		RequirePoWNext: l.cfg.powDifficultyFor(levelAfter) > 0,
+		RiskLevel:      dec.LevelAfter,
+		RequirePoWNext: l.cfg.powDifficultyFor(dec.LevelAfter) > 0,
 	}, nil
-}
-
-// adjustRisk escalates on bot-like signals and slowly de-escalates on clean solves.
-func (l *Layer) adjustRisk(ctx context.Context, hash string, level int, sr ScoreResult, solved bool) int {
-	suspicious := !sr.Consistent || sr.Score < l.cfg.RiskThreshold
-	switch {
-	case suspicious:
-		level++
-	case solved && level > 0:
-		level--
-	default:
-		return level
-	}
-	if level > l.cfg.MaxRiskLevel {
-		level = l.cfg.MaxRiskLevel
-	}
-	_ = l.setRiskLevel(ctx, hash, level)
-	return level
 }

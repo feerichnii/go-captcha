@@ -13,6 +13,7 @@ var (
 	ErrInvalidRequest = errors.New("antibot: invalid request")
 	ErrNoSecretKey    = errors.New("antibot: Config.SecretKey is required")
 	ErrStore          = errors.New("antibot: store failure")
+	ErrBadTrajectory  = errors.New("antibot: trajectory failed structural checks")
 )
 
 // IsClientError reports whether err should be shown to the end user as a
@@ -26,7 +27,11 @@ func IsClientError(err error) bool {
 		errors.Is(err, ErrLowScore),
 		errors.Is(err, ErrPoWInvalid),
 		errors.Is(err, ErrTooFast),
-		errors.Is(err, ErrInvalidRequest):
+		errors.Is(err, ErrInvalidRequest),
+		errors.Is(err, ErrClientKeyLooksLikeIP),
+		errors.Is(err, ErrBadSession),
+		errors.Is(err, ErrBadTrajectory),
+		errors.Is(err, ErrWeakSecretKey):
 		return true
 	}
 	return false

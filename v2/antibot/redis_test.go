@@ -43,6 +43,20 @@ func TestRedisStoreIncrTTL(t *testing.T) {
 	}
 }
 
+func TestRedisStoreIncrByClamp(t *testing.T) {
+	s := redisStore(t)
+	ctx := context.Background()
+	key := "gocaptcha:test:incrby:" + time.Now().Format("150405.000")
+	n, err := s.IncrBy(ctx, key, 5, time.Minute)
+	if err != nil || n != 5 {
+		t.Fatalf("n=%d err=%v", n, err)
+	}
+	n, err = s.IncrBy(ctx, key, -100, time.Minute)
+	if err != nil || n != 0 {
+		t.Fatalf("clamp want 0, got %d err=%v", n, err)
+	}
+}
+
 func TestRedisStoreGetDel(t *testing.T) {
 	s := redisStore(t)
 	ctx := context.Background()
@@ -61,7 +75,13 @@ func TestRedisStoreGetDel(t *testing.T) {
 
 func TestRedisLayerEndToEnd(t *testing.T) {
 	s := redisStore(t)
-	l, err := New(s, Config{SecretKey: testKey, MinSolveTime: time.Millisecond, KeyPrefix: "gocaptcha:test:" + time.Now().Format("150405.000") + ":"})
+	l, err := New(s, Config{
+		SecretKey:     testKey,
+		MinSolveTime:  time.Millisecond,
+		PoWProbeProb:  -1,
+		PoWJitterBits: -1,
+		KeyPrefix:     "gocaptcha:test:" + time.Now().Format("150405.000") + ":",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
