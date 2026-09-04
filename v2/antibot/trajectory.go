@@ -12,74 +12,155 @@ type Point struct {
 }
 
 // Trajectory is pointer/touch movement collected on the client.
+// It is untrusted input: treat the resulting score as a risk signal only.
 type Trajectory struct {
 	Points []Point  `json:"points"`
 	Events []string `json:"events,omitempty"` // pointerdown, pointermove, pointerup, ...
+}
+
+// DurationMs returns the client-claimed interaction time.
+func (tr Trajectory) DurationMs() int64 {
+	if len(tr.Points) < 2 {
+		return 0
+	}
+	return tr.Points[len(tr.Points)-1].T - tr.Points[0].T
+}
+
+// ScoreContext carries server-side facts the scorer may use.
+type ScoreContext struct {
+	// ElapsedMs is the server-measured time between issue and verify.
+	ElapsedMs int64
 }
 
 // ScoreResult holds the behavior score and diagnostics.
 type ScoreResult struct {
 	Score      float64            `json:"score"`
 	Components map[string]float64 `json:"components,omitempty"`
+	// Consistent is false when client-claimed timing contradicts server timing.
+	Consistent bool `json:"consistent"`
 }
 
-// ScoreBehavior evaluates how human-like a trajectory looks. Result is in [0,1].
+// Scorer maps a trajectory to a [0,1] human-likeness estimate.
+type Scorer interface {
+	Score(tr Trajectory, sc ScoreContext) ScoreResult
+}
+
+// ScoreWeights tune HeuristicScorer. They are normalized at scoring time.
+type ScoreWeights struct {
+	Points       float64
+	Duration     float64
+	Velocity     float64
+	Acceleration float64
+	Timing       float64
+	Corrections  float64
+	Events       float64
+}
+
+// DefaultWeights are a starting point; calibrate on your own traffic.
+func DefaultWeights() ScoreWeights {
+	return ScoreWeights{
+		Points:       0.15,
+		Duration:     0.20,
+		Velocity:     0.20,
+		Acceleration: 0.15,
+		Timing:       0.15,
+		Corrections:  0.10,
+		Events:       0.05,
+	}
+}
+
+func (w ScoreWeights) sum() float64 {
+	return w.Points + w.Duration + w.Velocity + w.Acceleration + w.Timing + w.Corrections + w.Events
+}
+
+// HeuristicScorer is the default Scorer.
+type HeuristicScorer struct {
+	Weights ScoreWeights
+}
+
+// ScoreBehavior scores with DefaultWeights and no server context.
 func ScoreBehavior(tr Trajectory) ScoreResult {
+	return HeuristicScorer{Weights: DefaultWeights()}.Score(tr, ScoreContext{})
+}
+
+// Score implements Scorer.
+func (h HeuristicScorer) Score(tr Trajectory, sc ScoreContext) ScoreResult {
+	w := h.Weights
+	if w.sum() <= 0 {
+		w = DefaultWeights()
+	}
 	comp := map[string]float64{}
 	pts := tr.Points
+	res := ScoreResult{Components: comp, Consistent: true}
 
 	if len(pts) < 3 {
 		comp["points"] = 0
-		return ScoreResult{Score: 0.05, Components: comp}
+		res.Score = 0.05
+		return res
 	}
 	comp["points"] = clamp01(float64(len(pts)) / 40)
 
-	duration := float64(pts[len(pts)-1].T - pts[0].T)
+	duration := float64(tr.DurationMs())
 	if duration <= 0 {
 		comp["duration"] = 0
-		return ScoreResult{Score: 0.05, Components: comp}
+		res.Score = 0.05
+		return res
 	}
-	// Humans typically take ~300ms–15s for interactive captchas.
 	comp["duration"] = durationScore(duration)
+
+	// The interaction happened entirely between issue and verify, so its
+	// claimed duration cannot exceed server-observed elapsed time (small slack
+	// for timer granularity).
+	if sc.ElapsedMs > 0 && duration > float64(sc.ElapsedMs)+100 {
+		res.Consistent = false
+	}
 
 	vels, accs, gaps, corrections := motionStats(pts)
 	comp["velocity"] = varianceScore(vels, 0.02, 8)
 	comp["acceleration"] = varianceScore(accs, 0.01, 20)
 	comp["timing"] = varianceScore(gaps, 2, 120)
 	comp["corrections"] = clamp01(float64(corrections) / 4)
+	comp["events"] = eventScore(tr.Events)
 
-	eventScore := 0.3
-	if len(tr.Events) > 0 {
-		eventScore = 0.7
-		hasDown, hasUp, hasMove := false, false, false
-		for _, e := range tr.Events {
-			switch e {
-			case "pointerdown", "mousedown", "touchstart":
-				hasDown = true
-			case "pointerup", "mouseup", "touchend":
-				hasUp = true
-			case "pointermove", "mousemove", "touchmove":
-				hasMove = true
-			}
-		}
-		if hasDown && hasUp && hasMove {
-			eventScore = 1
-		} else if hasMove {
-			eventScore = 0.75
+	score := w.Points*comp["points"] +
+		w.Duration*comp["duration"] +
+		w.Velocity*comp["velocity"] +
+		w.Acceleration*comp["acceleration"] +
+		w.Timing*comp["timing"] +
+		w.Corrections*comp["corrections"] +
+		w.Events*comp["events"]
+	score /= w.sum()
+
+	if !res.Consistent {
+		score *= 0.5
+	}
+	res.Score = clamp01(score)
+	return res
+}
+
+func eventScore(events []string) float64 {
+	if len(events) == 0 {
+		return 0.3
+	}
+	hasDown, hasUp, hasMove := false, false, false
+	for _, e := range events {
+		switch e {
+		case "pointerdown", "mousedown", "touchstart":
+			hasDown = true
+		case "pointerup", "mouseup", "touchend":
+			hasUp = true
+		case "pointermove", "mousemove", "touchmove":
+			hasMove = true
 		}
 	}
-	comp["events"] = eventScore
-
-	// Weighted average.
-	score := 0.15*comp["points"] +
-		0.2*comp["duration"] +
-		0.2*comp["velocity"] +
-		0.15*comp["acceleration"] +
-		0.15*comp["timing"] +
-		0.1*comp["corrections"] +
-		0.05*comp["events"]
-
-	return ScoreResult{Score: clamp01(score), Components: comp}
+	switch {
+	case hasDown && hasUp && hasMove:
+		return 1
+	case hasMove:
+		return 0.75
+	default:
+		return 0.7
+	}
 }
 
 func durationScore(ms float64) float64 {
@@ -120,7 +201,6 @@ func motionStats(pts []Point) (vels, accs, gaps []float64, corrections int) {
 			ax := (vx - prevVx) / dt
 			ay := (vy - prevVy) / dt
 			accs = append(accs, math.Hypot(ax, ay))
-			// Direction reversal / sharp correction.
 			dot := prevVx*vx + prevVy*vy
 			if dot < 0 && speed > 0.01 && math.Hypot(prevVx, prevVy) > 0.01 {
 				corrections++
@@ -132,7 +212,7 @@ func motionStats(pts []Point) (vels, accs, gaps []float64, corrections int) {
 	return vels, accs, gaps, corrections
 }
 
-// varianceScore rewards some natural variance; near-zero or huge variance looks bot-like.
+// varianceScore rewards natural variance; near-zero or huge variance looks bot-like.
 func varianceScore(samples []float64, lowGood, highGood float64) float64 {
 	if len(samples) < 2 {
 		return 0.2
@@ -148,7 +228,9 @@ func varianceScore(samples []float64, lowGood, highGood float64) float64 {
 		sum += d * d
 	}
 	variance := sum / float64(len(samples))
-	// Perfect bots often have near-zero variance.
+	if math.IsNaN(variance) || math.IsInf(variance, 0) {
+		return 0
+	}
 	if variance < lowGood*lowGood*0.01 {
 		return 0.15
 	}
@@ -158,12 +240,11 @@ func varianceScore(samples []float64, lowGood, highGood float64) float64 {
 	if variance < lowGood {
 		return clamp01(variance / lowGood)
 	}
-	// Too chaotic.
 	return clamp01(highGood / variance)
 }
 
 func clamp01(v float64) float64 {
-	if v < 0 {
+	if math.IsNaN(v) || v < 0 {
 		return 0
 	}
 	if v > 1 {

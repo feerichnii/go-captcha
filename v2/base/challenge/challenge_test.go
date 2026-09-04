@@ -2,77 +2,91 @@ package challenge
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
 
+var testKey = []byte("test-secret-key-32bytes-minimum!!")
+
 func TestSealOpenRoundTrip(t *testing.T) {
-	key := []byte("test-secret-key-32bytes-minimum!!")
-	p := Payload{
-		Kind: "slide",
-		Data: json.RawMessage(`{"x":10,"y":20}`),
-	}
-	tok, err := Seal(key, p)
+	p := Payload{ID: "abc", Kind: "slide", Data: json.RawMessage(`{"x":10,"y":20}`)}
+	tok, err := Seal(testKey, p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := Open(key, tok)
+	if strings.Contains(tok, "slide") || strings.Contains(tok, `"x"`) {
+		t.Fatal("token must not contain plaintext")
+	}
+	got, err := Open(testKey, tok, "abc")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Kind != "slide" {
-		t.Fatalf("kind=%s", got.Kind)
+	if got.Kind != "slide" || string(got.Data) != `{"x":10,"y":20}` {
+		t.Fatalf("%+v", got)
 	}
 }
 
-func TestOpenRejectsBadMAC(t *testing.T) {
-	key := []byte("test-secret-key-32bytes-minimum!!")
-	tok, err := Seal(key, Payload{Kind: "click", Data: json.RawMessage(`{}`)})
+func TestOpenRejectsWrongKey(t *testing.T) {
+	tok, err := Seal(testKey, Payload{Kind: "click", Data: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = Open([]byte("other-secret-key-32bytes-minimum!"), tok)
-	if err != ErrBadMAC {
+	if _, err = Open([]byte("other-key"), tok, ""); err != ErrBadMAC {
 		t.Fatalf("want ErrBadMAC, got %v", err)
 	}
 }
 
-func TestSealWithTTLExpires(t *testing.T) {
-	key := []byte("test-secret-key-32bytes-minimum!!")
-	p := Payload{
-		Kind: "rotate",
-		Data: json.RawMessage(`{"angle":90}`),
-		Exp:  time.Now().Add(-time.Second).Unix(),
+func TestOpenRejectsWrongID(t *testing.T) {
+	tok, _ := Seal(testKey, Payload{ID: "one", Kind: "click", Data: json.RawMessage(`{}`)})
+	if _, err := Open(testKey, tok, "two"); err != ErrBadMAC {
+		t.Fatalf("want ErrBadMAC on id mismatch, got %v", err)
 	}
-	tok, err := Seal(key, p)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestOpenRejectsTampered(t *testing.T) {
+	tok, _ := Seal(testKey, Payload{Kind: "click", Data: json.RawMessage(`{}`)})
+	b := []byte(tok)
+	b[len(b)-1] ^= 0x01
+	if _, err := Open(testKey, string(b), ""); err == nil {
+		t.Fatal("tampered token accepted")
 	}
-	_, err = Open(key, tok)
-	if err != ErrExpired {
+}
+
+func TestExpiry(t *testing.T) {
+	p := Payload{Kind: "rotate", Data: json.RawMessage(`{"angle":90}`), Exp: time.Now().Add(-time.Second).Unix()}
+	tok, _ := Seal(testKey, p)
+	if _, err := Open(testKey, tok, ""); err != ErrExpired {
 		t.Fatalf("want ErrExpired, got %v", err)
 	}
 }
 
-func TestClampPadding(t *testing.T) {
-	if ClampPadding(50, 10) != 10 {
-		t.Fatal("clamp high")
+func TestEmptyKey(t *testing.T) {
+	if _, err := Seal(nil, Payload{Kind: "x", Data: json.RawMessage(`{}`)}); err != ErrEmptyKey {
+		t.Fatalf("want ErrEmptyKey, got %v", err)
 	}
-	if ClampPadding(-1, 10) != 0 {
-		t.Fatal("clamp low")
+}
+
+func TestClampPadding(t *testing.T) {
+	if ClampPadding(50, 10) != 10 || ClampPadding(-1, 10) != 0 {
+		t.Fatal("clamp")
 	}
 }
 
 func TestNewID(t *testing.T) {
-	a, err := NewID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := NewID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if a == b || len(a) != 32 {
+	a, _ := NewID()
+	b, _ := NewID()
+	if a == b || !IsValidID(a) || IsValidID("zz") {
 		t.Fatalf("ids=%s %s", a, b)
 	}
+}
+
+func FuzzOpen(f *testing.F) {
+	tok, _ := Seal(testKey, Payload{ID: "id", Kind: "click", Data: json.RawMessage(`{}`)})
+	f.Add(tok)
+	f.Add("v2.")
+	f.Add("garbage")
+	f.Fuzz(func(t *testing.T, s string) {
+		_, _ = Open(testKey, s, "id")
+	})
 }
