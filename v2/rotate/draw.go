@@ -8,7 +8,6 @@ package rotate
 
 import (
 	"image"
-	"image/color"
 	"math"
 
 	"github.com/wenlng/go-captcha/v2/base/canvas"
@@ -67,6 +66,8 @@ func (d *drawImage) DrawWithCropCircle(params *DrawCropCircleImageParams) (image
 	draw.Draw(cvs.Get(), bgImage.Bounds(), bgImage, image.Point{}, draw.Over)
 	cvs.CropScaleCircle(bgImage.Bounds().Dx()/2, bgImage.Bounds().Dy()/2, bgImage.Bounds().Dy()/2, params.ScaleRatioSize)
 	cvs.Rotate(params.Rotate, true)
+	// Independent noise field for the thumb (see addDiscNoise).
+	addDiscNoise(cvs.Get(), 90, 10)
 
 	cvBounds := cvs.Bounds()
 	if cvBounds.Dy() > bgBounds.Dy() || cvBounds.Dx() > bgBounds.Dx() {
@@ -98,54 +99,77 @@ func (d *drawImage) DrawWithNRGBA(params *DrawImageParams) (img image.Image, err
 	}
 
 	rcm.CropCircle(rcm.Bounds().Dx()/2, rcm.Bounds().Dy()/2, rcm.Bounds().Dy()/2)
-	addRotateRingNoise(rcm.Get())
 	return rcm.Get(), nil
 }
 
-// addRotateRingNoise adds subtle rim noise to make angular correlation harder.
-func addRotateRingNoise(img *image.NRGBA) {
-	if img == nil {
+// NoiseMaster applies the master's independent noise field. Call it only after
+// the thumb has been cut from the clean master so the two fields are unrelated.
+func NoiseMaster(img image.Image) image.Image {
+	if n, ok := img.(*image.NRGBA); ok {
+		addDiscNoise(n, 90, 10)
+		return n
+	}
+	return img
+}
+
+// addDiscNoise applies independent per-pixel luminance noise to the opaque
+// disc. Master and thumb each get their own pass, so the noise fields differ
+// between the two images and do not line up under any rotation — this is what
+// raises the cost of rotation-correlation solvers (identical noise would help them).
+//
+// density is the fraction of pixels touched in 1/256 units, amplitude the max |delta|.
+func addDiscNoise(img *image.NRGBA, density, amplitude int) {
+	if img == nil || amplitude <= 0 || density <= 0 {
 		return
 	}
 	b := img.Bounds()
-	cx := (b.Min.X + b.Max.X) / 2
-	cy := (b.Min.Y + b.Max.Y) / 2
-	rOuter := b.Dx() / 2
-	rInner := rOuter - 6
-	if rInner < 10 {
+	w, h := b.Dx(), b.Dy()
+	if w < 20 || h < 20 {
 		return
 	}
-	for y := b.Min.Y; y < b.Max.Y; y++ {
-		for x := b.Min.X; x < b.Max.X; x++ {
-			dx := float64(x - cx)
-			dy := float64(y - cy)
-			dist := math.Sqrt(dx*dx + dy*dy)
-			if dist < float64(rInner) || dist > float64(rOuter) {
-				continue
-			}
-			if random.RandIntFast(0, 100) > 35 {
-				continue
-			}
-			p := img.NRGBAAt(x, y)
-			if p.A == 0 {
-				continue
-			}
-			delta := random.RandIntFast(-22, 22)
-			p.R = clampU8(int(p.R) + delta)
-			p.G = clampU8(int(p.G) + delta)
-			p.B = clampU8(int(p.B) + delta)
-			img.SetNRGBA(x, y, p)
-		}
+	cx, cy := w/2, h/2
+	r := w / 2
+	if h/2 < r {
+		r = h / 2
 	}
-	ticks := random.RandIntFast(6, 14)
-	for i := 0; i < ticks; i++ {
-		ang := float64(random.RandIntFast(0, 359)) * math.Pi / 180
-		x := cx + int(float64(rOuter-2)*math.Cos(ang))
-		y := cy + int(float64(rOuter-2)*math.Sin(ang))
-		if x < b.Min.X || x >= b.Max.X || y < b.Min.Y || y >= b.Max.Y {
+	r2 := r * r
+
+	// Two random bytes per pixel: one gates density, one drives the delta.
+	noise := random.FastBytes(w * h * 2)
+	ni := 0
+	span := 2*amplitude + 1
+	for y := 0; y < h; y++ {
+		dy := y - cy
+		if dy*dy > r2 {
+			ni += w * 2
 			continue
 		}
-		img.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: 90})
+		half := int(math.Sqrt(float64(r2 - dy*dy)))
+		x0, x1 := cx-half, cx+half
+		if x0 < 0 {
+			x0 = 0
+		}
+		if x1 > w-1 {
+			x1 = w - 1
+		}
+		ni += x0 * 2
+		row := img.Pix[y*img.Stride:]
+		for x := x0; x <= x1; x++ {
+			gate, raw := noise[ni], noise[ni+1]
+			ni += 2
+			if int(gate) >= density {
+				continue
+			}
+			i := x * 4
+			if row[i+3] == 0 {
+				continue
+			}
+			delta := int(raw)%span - amplitude
+			row[i] = clampU8(int(row[i]) + delta)
+			row[i+1] = clampU8(int(row[i+1]) + delta)
+			row[i+2] = clampU8(int(row[i+2]) + delta)
+		}
+		ni += (w - 1 - x1) * 2
 	}
 }
 

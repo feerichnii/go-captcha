@@ -109,6 +109,7 @@ func (c *captcha) Generate() (CaptchaData, error) {
 	if err != nil {
 		return nil, err
 	}
+	masterImage = NoiseMaster(masterImage)
 
 	return &CaptData{
 		block:       block,

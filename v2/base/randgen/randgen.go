@@ -50,7 +50,8 @@ func RandString(chars []string) string {
 	if len(chars) == 0 {
 		return ""
 	}
-	index := random.RandIntFast(0, len(chars)-1)
+	// Answer characters/shapes are secret material: use crypto/rand.
+	index := random.RandInt(0, len(chars)-1)
 	return chars[index]
 }
 

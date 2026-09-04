@@ -8,7 +8,6 @@ package canvas
 
 import (
 	"image"
-	"image/color"
 	"math"
 
 	"github.com/golang/freetype"
@@ -34,16 +33,17 @@ type NRGBA interface {
 
 var _ NRGBA = (*nRGBA)(nil)
 
-// NewNRGBA creates an NRGBA canvas
+// NewNRGBA creates an NRGBA canvas. image.NewNRGBA is already fully
+// transparent, so only the opaque white variant needs a fill.
 func NewNRGBA(r image.Rectangle, isAlpha bool) NRGBA {
 	nrgba := image.NewNRGBA(r)
-	for y := 0; y < r.Max.Y; y++ {
-		for x := 0; x < r.Max.X; x++ {
-			if isAlpha {
-				nrgba.Set(x, y, color.Alpha{A: uint8(0)})
-			} else {
-				nrgba.Set(x, y, color.RGBA{R: 255, G: 255, B: 255, A: 255})
-			}
+	if !isAlpha && len(nrgba.Pix) > 0 {
+		row := nrgba.Pix[:nrgba.Stride]
+		for i := range row {
+			row[i] = 0xFF
+		}
+		for off := nrgba.Stride; off < len(nrgba.Pix); off += nrgba.Stride {
+			copy(nrgba.Pix[off:off+nrgba.Stride], row)
 		}
 	}
 
@@ -139,24 +139,23 @@ func (n *nRGBA) CalcMarginBlankArea() *AreaRect {
 	maxY := 0
 
 	img := n.NRGBA
-	for y := 0; y < nH; y++ {
-		for x := 0; x < nW; x++ {
-			co := img.At(x, y)
-			_, _, _, a := co.RGBA()
-			if a > 0 {
-				if x < minX {
-					minX = x
-				}
-				if x > maxX {
-					maxX = x
-				}
-
-				if y < minY {
-					minY = y
-				}
-				if y > maxY {
-					maxY = y
-				}
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		row := img.Pix[(y-bounds.Min.Y)*img.Stride:]
+		for x := bounds.Min.X; x < bounds.Max.X; x++ {
+			if row[(x-bounds.Min.X)*4+3] == 0 {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if y > maxY {
+				maxY = y
 			}
 		}
 	}
@@ -218,21 +217,50 @@ func (n *nRGBA) Rotate(a int, overCrop bool) {
 	}
 }
 
+// circleMask builds an opaque-white disc mask by writing Pix directly.
+// Rows outside the disc are skipped; per-row x extents come from the
+// integer circle equation, so there is no per-pixel sqrt or color conversion.
+func circleMask(bounds image.Rectangle, cx, cy, radius int) *image.NRGBA {
+	mask := image.NewNRGBA(bounds)
+	if radius <= 0 {
+		return mask
+	}
+	r2 := radius * radius
+	yStart := cy - radius
+	if yStart < bounds.Min.Y {
+		yStart = bounds.Min.Y
+	}
+	yEnd := cy + radius
+	if yEnd > bounds.Max.Y-1 {
+		yEnd = bounds.Max.Y - 1
+	}
+	for py := yStart; py <= yEnd; py++ {
+		dy := py - cy
+		half := int(math.Sqrt(float64(r2 - dy*dy)))
+		x0 := cx - half
+		x1 := cx + half
+		if x0 < bounds.Min.X {
+			x0 = bounds.Min.X
+		}
+		if x1 > bounds.Max.X-1 {
+			x1 = bounds.Max.X - 1
+		}
+		if x0 > x1 {
+			continue
+		}
+		off := (py-bounds.Min.Y)*mask.Stride + (x0-bounds.Min.X)*4
+		row := mask.Pix[off : off+(x1-x0+1)*4]
+		for i := range row {
+			row[i] = 0xFF
+		}
+	}
+	return mask
+}
+
 // CropCircle crops a circular area
 func (n *nRGBA) CropCircle(x, y, radius int) {
 	bounds := n.Get().Bounds()
-	mask := image.NewNRGBA(bounds)
-	for py := bounds.Min.Y; py < bounds.Max.Y; py++ {
-		for px := bounds.Min.X; px < bounds.Max.X; px++ {
-			dist := math.Hypot(float64(px-x), float64(py-y))
-			if dist <= float64(radius) {
-				mask.Set(px, py, color.White)
-			} else {
-				mask.Set(px, py, color.Transparent)
-			}
-		}
-	}
-
+	mask := circleMask(bounds, x, y, radius)
 	draw.DrawMask(mask, mask.Bounds(), n.Get(), image.Point{X: 0, Y: 0}, mask, image.Point{}, draw.Over)
 	n.NRGBA = mask
 }
@@ -240,18 +268,7 @@ func (n *nRGBA) CropCircle(x, y, radius int) {
 // CropScaleCircle scales and crops a circular area
 func (n *nRGBA) CropScaleCircle(x, y, radius int, zoomSize int) {
 	bounds := n.Get().Bounds()
-	mask := image.NewNRGBA(bounds)
-
-	for py := bounds.Min.Y; py < bounds.Max.Y; py++ {
-		for px := bounds.Min.X; px < bounds.Max.X; px++ {
-			dist := math.Hypot(float64(px-x), float64(py-y))
-			if dist <= float64(radius) {
-				mask.Set(px, py, color.White)
-			} else {
-				mask.Set(px, py, color.Transparent)
-			}
-		}
-	}
+	mask := circleMask(bounds, x, y, radius)
 
 	if zoomSize > 0 {
 		subtract := zoomSize * 2

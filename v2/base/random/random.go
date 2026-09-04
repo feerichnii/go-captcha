@@ -7,9 +7,10 @@
 package random
 
 import (
+	"bufio"
 	rand2 "crypto/rand"
-	"math"
-	"math/big"
+	"encoding/binary"
+	"io"
 	"math/rand"
 	"sync"
 	"time"
@@ -24,31 +25,29 @@ var (
 		},
 	}
 
-	rnd  *rand.Rand
-	mu   sync.Mutex
-	once sync.Once
+	// cryptoBuf amortizes getrandom syscalls: one 4 KiB read serves ~512 draws.
+	cryptoMu  sync.Mutex
+	cryptoBuf = bufio.NewReaderSize(rand2.Reader, 4096)
 )
+
+// cryptoUint64 returns 64 crypto-random bits (ok=false if the source failed).
+func cryptoUint64() (uint64, bool) {
+	var b [8]byte
+	cryptoMu.Lock()
+	_, err := io.ReadFull(cryptoBuf, b[:])
+	cryptoMu.Unlock()
+	if err != nil {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint64(b[:]), true
+}
 
 // cryptoSeed returns a 63-bit seed from crypto/rand (falls back to time).
 func cryptoSeed() int64 {
-	n, err := rand2.Int(rand2.Reader, big.NewInt(math.MaxInt64))
-	if err != nil {
-		return time.Now().UnixNano()
+	if v, ok := cryptoUint64(); ok {
+		return int64(v >> 1)
 	}
-	return n.Int64()
-}
-
-// initRnd initializes the global random number generator (deprecated, use getPooledRnd instead)
-func initRnd() {
-	rnd = rand.New(rand.NewSource(cryptoSeed()))
-}
-
-// getRnd returns the global random number generator (deprecated, use getPooledRnd instead)
-func getRnd() *rand.Rand {
-	once.Do(initRnd)
-	mu.Lock()
-	defer mu.Unlock()
-	return rnd
+	return time.Now().UnixNano()
 }
 
 // getPooledRnd returns a random number generator from the pool
@@ -108,40 +107,47 @@ func PermFast(n int) []int {
 	return r.Perm(n)
 }
 
-// RandInt generates a safe random number in the interval [min, max] (thread-safe)
+// RandInt generates a crypto-random number in the interval [min, max] (thread-safe).
+// Uses unbiased rejection sampling on 64-bit draws; no big.Int allocation.
 func RandInt(min, max int) int {
 	if min > max {
 		min, max = max, min
 	}
-
 	if min == max {
 		return min
 	}
 
-	rangeSize := max - min + 1
-	if rangeSize <= 0 {
+	rangeSize := uint64(int64(max) - int64(min) + 1)
+	if rangeSize == 0 {
 		return min
 	}
 
-	if min < 0 {
-		f64Min := math.Abs(float64(min))
-		i64Min := int64(f64Min)
-		bigRange := big.NewInt(int64(max + 1 + int(i64Min)))
-		result, err := rand2.Int(rand2.Reader, bigRange)
-		if err != nil {
-			// Fallback to math/rand if crypto/rand fails
+	// Largest multiple of rangeSize that fits in uint64; values above it are rejected.
+	limit := ^uint64(0) - (^uint64(0) % rangeSize)
+	for i := 0; i < 16; i++ {
+		v, ok := cryptoUint64()
+		if !ok {
 			return RandIntFast(min, max)
 		}
-		return int(result.Int64() - i64Min)
+		if v < limit {
+			return int(int64(min) + int64(v%rangeSize))
+		}
 	}
+	// Astronomically unlikely (p < 2^-16 per call) — fall back rather than loop forever.
+	return RandIntFast(min, max)
+}
 
-	bigRange := big.NewInt(int64(rangeSize))
-	result, err := rand2.Int(rand2.Reader, bigRange)
-	if err != nil {
-		// Fallback to math/rand if crypto/rand fails
-		return RandIntFast(min, max)
+// FastBytes fills a new slice with math/rand bytes from the pool. Intended for
+// bulk cosmetic noise where one pooled Rand per pixel would dominate the cost.
+func FastBytes(n int) []byte {
+	if n <= 0 {
+		return nil
 	}
-	return min + int(result.Int64())
+	b := make([]byte, n)
+	r := getPooledRnd()
+	_, _ = r.Read(b)
+	putPooledRnd(r)
+	return b
 }
 
 // RandIntFast generates a random number in the interval [min, max] using math/rand
