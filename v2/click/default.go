@@ -94,9 +94,10 @@ func defaultOptions() Option {
 		opts.rangeThumbColors = getDefaultThumbColors()
 		opts.rangeThumbBgColors = getDefaultThumbColors()
 		opts.thumbBgDistort = option.DistortLevel4
-		opts.thumbBgCirclesNum = 24
-		opts.thumbBgSlimLineNum = 2
-		opts.isThumbNonDeformAbility = true
+		opts.thumbBgCirclesNum = 36
+		opts.thumbBgSlimLineNum = 4
+		// Distort thumb glyphs by default to raise OCR cost.
+		opts.isThumbNonDeformAbility = false
 		opts.thumbDisturbAlpha = 1
 	}
 }

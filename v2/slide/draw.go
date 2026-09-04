@@ -8,9 +8,11 @@ package slide
 
 import (
 	"image"
+	"image/color"
 
 	"github.com/wenlng/go-captcha/v2/base/canvas"
 	"github.com/wenlng/go-captcha/v2/base/randgen"
+	"github.com/wenlng/go-captcha/v2/base/random"
 	"golang.org/x/image/draw"
 )
 
@@ -81,6 +83,9 @@ func (d *drawImage) DrawWithTemplate(params *DrawTplImageParams) (image.Image, e
 	}
 	draw.Draw(cvs.Get(), maskImage.Bounds(), maskImage, image.Point{}, draw.Over)
 
+	// Soften puzzle edges to raise template-match accuracy requirements.
+	jitterTileEdges(cvs.Get(), 2)
+
 	return cvs, nil
 }
 
@@ -138,4 +143,55 @@ func (d *drawImage) drawGraphImage(width, height int, img image.Image) (canvas.N
 	cvs := canvas.CreateNRGBACanvas(width, height, true)
 	draw.BiLinear.Scale(cvs.Get(), cvs.Bounds(), img, img.Bounds(), draw.Over, nil)
 	return cvs, nil
+}
+
+// jitterTileEdges randomly erodes/dilates alpha near non-transparent edges.
+func jitterTileEdges(img *image.NRGBA, radius int) {
+	if img == nil || radius <= 0 {
+		return
+	}
+	b := img.Bounds()
+	type px struct{ x, y int }
+	var edge []px
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if img.NRGBAAt(x, y).A < 16 {
+				continue
+			}
+			isEdge := false
+			for dy := -1; dy <= 1 && !isEdge; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					nx, ny := x+dx, y+dy
+					if nx < b.Min.X || nx >= b.Max.X || ny < b.Min.Y || ny >= b.Max.Y {
+						isEdge = true
+						break
+					}
+					if img.NRGBAAt(nx, ny).A < 16 {
+						isEdge = true
+						break
+					}
+				}
+			}
+			if isEdge {
+				edge = append(edge, px{x, y})
+			}
+		}
+	}
+	for _, p := range edge {
+		if random.RandIntFast(0, 100) > 55 {
+			continue
+		}
+		ox := p.x + random.RandIntFast(-radius, radius)
+		oy := p.y + random.RandIntFast(-radius, radius)
+		if ox < b.Min.X || ox >= b.Max.X || oy < b.Min.Y || oy >= b.Max.Y {
+			continue
+		}
+		c := img.NRGBAAt(p.x, p.y)
+		if random.RandIntFast(0, 1) == 0 {
+			c.A = uint8(random.RandIntFast(40, 160))
+			img.SetNRGBA(ox, oy, c)
+		} else {
+			img.SetNRGBA(p.x, p.y, color.NRGBA{})
+		}
+	}
 }

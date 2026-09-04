@@ -59,7 +59,7 @@ func (c *jpegImageDta) ToBytes() ([]byte, error) {
 		return []byte{}, ImageEmptyErr
 	}
 
-	return codec.EncodeJPEGToByte(c.image, option.QualityNone)
+	return codec.EncodeJPEGToByte(c.image, option.QualityLevel2)
 }
 
 // ToBytesWithQuality converts the JPEG image to a byte array with specified quality
@@ -71,7 +71,7 @@ func (c *jpegImageDta) ToBytesWithQuality(imageQuality int) ([]byte, error) {
 	if imageQuality <= option.QualityNone && imageQuality >= option.QualityLevel5 {
 		return codec.EncodeJPEGToByte(c.image, imageQuality)
 	}
-	return codec.EncodeJPEGToByte(c.image, option.QualityNone)
+	return codec.EncodeJPEGToByte(c.image, option.QualityLevel2)
 }
 
 // ToBase64Data converts the JPEG image to Base64 data (without prefix)
@@ -80,7 +80,7 @@ func (c *jpegImageDta) ToBase64Data() (string, error) {
 		return "", ImageEmptyErr
 	}
 
-	return codec.EncodeJPEGToBase64Data(c.image, option.QualityNone)
+	return codec.EncodeJPEGToBase64Data(c.image, option.QualityLevel2)
 }
 
 // ToBase64DataWithQuality converts the JPEG image to Base64 data with specified quality (without prefix)
@@ -92,7 +92,7 @@ func (c *jpegImageDta) ToBase64DataWithQuality(imageQuality int) (string, error)
 	if imageQuality <= option.QualityNone && imageQuality >= option.QualityLevel5 {
 		return codec.EncodeJPEGToBase64Data(c.image, imageQuality)
 	}
-	return codec.EncodeJPEGToBase64Data(c.image, option.QualityNone)
+	return codec.EncodeJPEGToBase64Data(c.image, option.QualityLevel2)
 }
 
 // ToBase64 converts the JPEG image to a Base64 string
@@ -101,7 +101,7 @@ func (c *jpegImageDta) ToBase64() (string, error) {
 		return "", ImageEmptyErr
 	}
 
-	return codec.EncodeJPEGToBase64(c.image, option.QualityNone)
+	return codec.EncodeJPEGToBase64(c.image, option.QualityLevel2)
 }
 
 // ToBase64WithQuality converts the JPEG image to a Base64 string with specified quality
@@ -113,5 +113,5 @@ func (c *jpegImageDta) ToBase64WithQuality(imageQuality int) (string, error) {
 	if imageQuality <= option.QualityNone && imageQuality >= option.QualityLevel5 {
 		return codec.EncodeJPEGToBase64(c.image, imageQuality)
 	}
-	return codec.EncodeJPEGToBase64(c.image, option.QualityNone)
+	return codec.EncodeJPEGToBase64(c.image, option.QualityLevel2)
 }

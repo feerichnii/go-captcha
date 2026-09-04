@@ -10,7 +10,9 @@ import (
 	"image"
 )
 
-// Block defines the block data for the slide CAPTCHA
+// Block defines the block data for the slide CAPTCHA.
+// X/Y are the secret target position — persist via GetData() server-side only.
+// Clients must receive GetPublicData() (DX/DY + size), never X/Y.
 type Block struct {
 	X      int `json:"x"`
 	Y      int `json:"y"`
@@ -24,6 +26,17 @@ type Block struct {
 	// Display x,y
 	DX int `json:"dx"`
 	DY int `json:"dy"`
+}
+
+// PublicBlock is safe to send to clients (no target X/Y).
+type PublicBlock struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+	// Deprecated: prefer DX/DY
+	TileX int `json:"tile_x"`
+	TileY int `json:"tile_y"`
+	DX    int `json:"dx"`
+	DY    int `json:"dy"`
 }
 
 // DrawBlock defines the parameters for drawing slide CAPTCHA blocks

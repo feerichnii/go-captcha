@@ -11,7 +11,6 @@ import (
 	"image"
 	"image/color"
 	"math"
-	"math/rand"
 
 	"github.com/wenlng/go-captcha/v2/base/helper"
 	"github.com/wenlng/go-captcha/v2/base/imagedata"
@@ -214,7 +213,7 @@ func (c *captcha) generateWithText() (CaptchaData, error) {
 //   - []string: List of shape names
 //   - error: Error information
 func (c *captcha) genShapes() ([]string, error) {
-	length := random.RandIntFast(c.opts.rangeLen.Min, c.opts.rangeLen.Max)
+	length := random.RandInt(c.opts.rangeLen.Min, c.opts.rangeLen.Max)
 	shapeNames := c.genRandShape(length)
 	if len(shapeNames) == 0 {
 		return []string{}, EmptyShapesErr
@@ -227,7 +226,7 @@ func (c *captcha) genShapes() ([]string, error) {
 //   - []string: List of characters
 //   - error: Error information
 func (c *captcha) genChars() ([]string, error) {
-	length := random.RandIntFast(c.opts.rangeLen.Min, c.opts.rangeLen.Max)
+	length := random.RandInt(c.opts.rangeLen.Min, c.opts.rangeLen.Max)
 	chars := c.genRandChar(length)
 	if len(chars) == 0 {
 		return []string{}, EmptyCharacterErr
@@ -260,7 +259,7 @@ func (c *captcha) genDots(imageSize *option.Size, size *option.RangeVal, values 
 		randColor := randgen.RandHexColor(c.opts.rangeColors)
 		randColor2 := randgen.RandHexColor(c.opts.rangeThumbColors)
 
-		randSize := random.RandIntFast(size.Min, size.Max)
+		randSize := random.RandInt(size.Min, size.Max)
 		cHeight := randSize
 		cWidth := randSize
 
@@ -280,8 +279,8 @@ func (c *captcha) genDots(imageSize *option.Size, size *option.RangeVal, values 
 		dy := 10
 		w := width / length
 		rd := math.Abs(float64(w) - float64(cWidth))
-		xx := (i * w) + random.RandIntFast(0, int(math.Max(rd, 1)))
-		yy := random.RandIntFast(dy, height+cHeight)
+		xx := (i * w) + random.RandInt(0, int(math.Max(rd, 1)))
+		yy := random.RandInt(dy, height+cHeight)
 
 		x := int(math.Min(math.Max(float64(xx), float64(dy)), float64(width-dy-(padding*2))))
 		y := int(math.Min(math.Max(float64(yy), float64(cHeight+dy)), float64(height+(cHeight/2)-(padding*2))))
@@ -347,7 +346,7 @@ func (c *captcha) check() error {
 func (c *captcha) rangeCheckDots(dots map[int]*Dot) (map[int]*Dot, []string) {
 	rs := random.Perm(len(dots))
 	chkDots := make(map[int]*Dot, len(rs))
-	count := random.RandIntFast(c.opts.rangeVerifyLen.Min, c.opts.rangeVerifyLen.Max)
+	count := random.RandInt(c.opts.rangeVerifyLen.Min, c.opts.rangeVerifyLen.Max)
 	maxCount := count
 	if c.opts.disabledRangeVerifyLen {
 		maxCount = len(rs)
@@ -445,7 +444,11 @@ func (c *captcha) genThumbImage(size *option.Size, dots map[int]*Dot) (image.Ima
 		}
 
 		dx := int(math.Max(float64(width*i+width/dot.Width), 8))
-		dy := size.Height/2 + dot.Size/2 - rand.Intn(size.Height/16*length)
+		jitter := 1
+		if size.Height/16*length > 1 {
+			jitter = size.Height / 16 * length
+		}
+		dy := size.Height/2 + dot.Size/2 - random.RandInt(0, jitter-1)
 
 		drawDot := &DrawDot{
 			Dot:    dot,
@@ -571,7 +574,7 @@ func (c *captcha) randAngle() int {
 	}
 
 	angle := angles[index]
-	res := random.RandIntFast(angle.Min, angle.Max)
+	res := random.RandInt(angle.Min, angle.Max)
 
 	return res
 }
