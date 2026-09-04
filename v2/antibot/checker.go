@@ -3,9 +3,9 @@ package antibot
 import (
 	"encoding/json"
 
-	"github.com/wenlng/go-captcha/v2/click"
-	"github.com/wenlng/go-captcha/v2/rotate"
-	"github.com/wenlng/go-captcha/v2/slide"
+	"github.com/feerichnii/go-captcha/v2/click"
+	"github.com/feerichnii/go-captcha/v2/rotate"
+	"github.com/feerichnii/go-captcha/v2/slide"
 )
 
 // AnswerChecker validates a submitted answer against the stored (decrypted) secret.

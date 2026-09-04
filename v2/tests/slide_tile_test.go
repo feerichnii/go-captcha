@@ -7,13 +7,16 @@ import (
 	"log"
 	"testing"
 
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/slide"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/slide"
 )
 
 var slideTileCapt slide.Captcha
 
 func init() {
+	if !fixturesAvailable() {
+		return
+	}
 	builder := slide.NewBuilder(
 	//slide.WithGenGraphNumber(2),
 	//slide.WithEnableGraphVerticalRandom(true),
@@ -91,6 +94,7 @@ func getSlideTileGraphArr() []*slide.GraphImage {
 }
 
 func TestSlideTileCaptcha(t *testing.T) {
+	requireFixtures(t)
 	captData, err := slideTileCapt.Generate()
 	if err != nil {
 		log.Fatalln(err)

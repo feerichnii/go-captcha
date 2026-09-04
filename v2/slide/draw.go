@@ -10,9 +10,9 @@ import (
 	"image"
 	"image/color"
 
-	"github.com/wenlng/go-captcha/v2/base/canvas"
-	"github.com/wenlng/go-captcha/v2/base/randgen"
-	"github.com/wenlng/go-captcha/v2/base/random"
+	"github.com/feerichnii/go-captcha/v2/base/canvas"
+	"github.com/feerichnii/go-captcha/v2/base/randgen"
+	"github.com/feerichnii/go-captcha/v2/base/random"
 	"golang.org/x/image/draw"
 )
 

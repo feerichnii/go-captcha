@@ -9,7 +9,7 @@ package click
 import (
 	"math"
 
-	"github.com/wenlng/go-captcha/v2/base/challenge"
+	"github.com/feerichnii/go-captcha/v2/base/challenge"
 )
 
 // DefaultMaxPadding is the recommended upper bound for click padding.

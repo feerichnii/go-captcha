@@ -15,7 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/wenlng/go-captcha/v2/base/random"
+	"github.com/feerichnii/go-captcha/v2/base/random"
 )
 
 // t2x converts an integer to a hexadecimal string

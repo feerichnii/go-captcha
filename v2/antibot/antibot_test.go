@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/wenlng/go-captcha/v2/click"
-	"github.com/wenlng/go-captcha/v2/slide"
+	"github.com/feerichnii/go-captcha/v2/click"
+	"github.com/feerichnii/go-captcha/v2/slide"
 )
 
 var testKey = []byte("unit-test-secret-key-please-rotate")

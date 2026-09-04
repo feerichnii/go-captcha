@@ -2,19 +2,19 @@
 <img width="120" style="padding-top: 50px; margin: 0;" src="https://github.com/wenlng/git-assets/blob/master/go-captcha/gocaptcha_logo.svg?raw=true"/>
 <h1 style="margin: 0; padding: 0">GoCaptcha</h1>
 <p>Golang 行为验证码</p>
-<a href="https://goreportcard.com/report/github.com/wenlng/go-captcha"><img src="https://goreportcard.com/badge/github.com/wenlng/go-captcha"/></a>
-<a href="https://godoc.org/github.com/wenlng/go-captcha"><img src="https://godoc.org/github.com/wenlng/go-captcha?status.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha/releases"><img src="https://img.shields.io/github/v/release/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha/blob/v2/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha"><img src="https://img.shields.io/github/stars/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha"><img src="https://img.shields.io/github/last-commit/wenlng/go-captcha.svg"/></a>
+<a href="https://goreportcard.com/report/github.com/feerichnii/go-captcha"><img src="https://goreportcard.com/badge/github.com/feerichnii/go-captcha"/></a>
+<a href="https://godoc.org/github.com/feerichnii/go-captcha"><img src="https://godoc.org/github.com/feerichnii/go-captcha?status.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha/releases"><img src="https://img.shields.io/github/v/release/wenlng/go-captcha.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha/blob/v2/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/stars/wenlng/go-captcha.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/last-commit/wenlng/go-captcha.svg"/></a>
 </div>
 
 <br/>
 
 > [English](README.md) | 中文 
 <p style="text-align: center">
-<a style="font-weight: bold" href="https://github.com/wenlng/go-captcha">Go Captcha</a> 是功能强大、模块化且高度可定制的行为式验证码库，支持多种交互式验证码类型：点选（Click）、滑动（Slide）、拖拽（Drag-Drop） 和 旋转（Rotate）。
+<a style="font-weight: bold" href="https://github.com/feerichnii/go-captcha">Go Captcha</a> 是功能强大、模块化且高度可定制的行为式验证码库，支持多种交互式验证码类型：点选（Click）、滑动（Slide）、拖拽（Drag-Drop） 和 旋转（Rotate）。
 </p>
 
 <p style="text-align: center"> ⭐️ 如果能帮助到你，请随手给点一个star</p>
@@ -38,7 +38,7 @@
 | [online demo](http://gocaptcha.wencodes.com/demo/)                         | GoCaptcha 在线演示                                                                              |
 | [go-captcha-example](https://github.com/wenlng/go-captcha-example)         | Golang + 前端 + APP实例                                                                         |
 | [go-captcha-assets](https://github.com/wenlng/go-captcha-assets)           | Golang 内嵌素材资源                                                                               |
-| [go-captcha](https://github.com/wenlng/go-captcha)                         | Golang 验证码                                                                                  |
+| [go-captcha](https://github.com/feerichnii/go-captcha)                         | Golang 验证码                                                                                  |
 | [go-captcha-jslib](https://github.com/wenlng/go-captcha-jslib)             | Javascript 验证码                                                                              |
 | [go-captcha-vue](https://github.com/wenlng/go-captcha-vue)                 | Vue 验证码                                                                                     |
 | [go-captcha-react](https://github.com/wenlng/go-captcha-react)             | React 验证码                                                                                   |
@@ -96,7 +96,7 @@ $ source ~/.profile
 
 ## 安装
 ```shell
-$ go get -u github.com/wenlng/go-captcha/v2@latest
+$ go get -u github.com/feerichnii/go-captcha/v2@latest
 ```
 
 ## 按需引入模块
@@ -104,7 +104,7 @@ $ go get -u github.com/wenlng/go-captcha/v2@latest
 package main
 
 // 按需求引入对应的模块
-import "github.com/wenlng/go-captcha/v2/${click|slide|rotate}"
+import "github.com/feerichnii/go-captcha/v2/${click|slide|rotate}"
 
 func main(){
    // ....
@@ -140,9 +140,9 @@ import (
 
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/click"
-	"github.com/wenlng/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/click"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
 var textCapt click.Captcha
@@ -335,9 +335,9 @@ import (
 	"log"
 	"io/ioutil"
 
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/slide"
-	"github.com/wenlng/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/slide"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
 var slideTileCapt slide.Captcha
@@ -523,8 +523,8 @@ import (
 	"log"
 	"io/ioutil"
 
-	"github.com/wenlng/go-captcha/v2/rotate"
-	"github.com/wenlng/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/rotate"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
 var rotateCapt rotate.Captcha

@@ -7,7 +7,7 @@
 package slide
 
 import (
-	"github.com/wenlng/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/base/option"
 )
 
 // defaultOptions is to the default configuration

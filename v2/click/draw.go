@@ -13,11 +13,11 @@ import (
 	mRand "math/rand"
 
 	"github.com/golang/freetype"
-	"github.com/wenlng/go-captcha/v2/base/canvas"
-	"github.com/wenlng/go-captcha/v2/base/helper"
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/base/randgen"
-	"github.com/wenlng/go-captcha/v2/base/random"
+	"github.com/feerichnii/go-captcha/v2/base/canvas"
+	"github.com/feerichnii/go-captcha/v2/base/helper"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/base/randgen"
+	"github.com/feerichnii/go-captcha/v2/base/random"
 	"golang.org/x/image/draw"
 	"golang.org/x/image/font"
 )

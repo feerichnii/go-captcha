@@ -6,7 +6,7 @@
 
 package slide
 
-import "github.com/wenlng/go-captcha/v2/base/challenge"
+import "github.com/feerichnii/go-captcha/v2/base/challenge"
 
 // DefaultMaxPadding is the recommended upper bound for slide padding (pixels).
 const DefaultMaxPadding = 8

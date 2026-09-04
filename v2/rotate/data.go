@@ -6,7 +6,7 @@
 
 package rotate
 
-import "github.com/wenlng/go-captcha/v2/base/imagedata"
+import "github.com/feerichnii/go-captcha/v2/base/imagedata"
 
 // CaptchaData defines the interface for rotate CAPTCHA data
 type CaptchaData interface {

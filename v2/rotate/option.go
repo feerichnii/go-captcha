@@ -7,7 +7,7 @@
 package rotate
 
 import (
-	"github.com/wenlng/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/base/option"
 )
 
 type Options struct {

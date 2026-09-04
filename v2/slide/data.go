@@ -6,7 +6,7 @@
 
 package slide
 
-import "github.com/wenlng/go-captcha/v2/base/imagedata"
+import "github.com/feerichnii/go-captcha/v2/base/imagedata"
 
 // CaptchaData defines the interface for slide CAPTCHA data
 type CaptchaData interface {

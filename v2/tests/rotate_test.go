@@ -7,12 +7,15 @@ import (
 	"log"
 	"testing"
 
-	"github.com/wenlng/go-captcha/v2/rotate"
+	"github.com/feerichnii/go-captcha/v2/rotate"
 )
 
 var rotateCapt rotate.Captcha
 
 func init() {
+	if !fixturesAvailable() {
+		return
+	}
 	builder := rotate.NewBuilder()
 
 	bgImage, err := loadPng("../.cache/bg.png")
@@ -36,6 +39,7 @@ func init() {
 }
 
 func TestRotateDirectionCaptcha(t *testing.T) {
+	requireFixtures(t)
 	captData, err := rotateCapt.Generate()
 	if err != nil {
 		log.Fatalln(err)

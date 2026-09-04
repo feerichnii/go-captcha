@@ -2,19 +2,19 @@
 <img width="120" style="padding-top: 50px; margin: 0;" src="https://github.com/wenlng/git-assets/blob/master/go-captcha/gocaptcha_logo.svg?raw=true"/>
 <h1 style="margin: 0; padding: 0">GoCaptcha</h1>
 <p>Behavior Captcha Of Golang</p>
-<a href="https://goreportcard.com/report/github.com/wenlng/go-captcha"><img src="https://goreportcard.com/badge/github.com/wenlng/go-captcha"/></a>
-<a href="https://godoc.org/github.com/wenlng/go-captcha"><img src="https://godoc.org/github.com/wenlng/go-captcha?status.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha/releases"><img src="https://img.shields.io/github/v/release/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha/blob/v2/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha"><img src="https://img.shields.io/github/stars/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/wenlng/go-captcha"><img src="https://img.shields.io/github/last-commit/wenlng/go-captcha.svg"/></a>
+<a href="https://goreportcard.com/report/github.com/feerichnii/go-captcha"><img src="https://goreportcard.com/badge/github.com/feerichnii/go-captcha"/></a>
+<a href="https://godoc.org/github.com/feerichnii/go-captcha"><img src="https://godoc.org/github.com/feerichnii/go-captcha?status.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha/releases"><img src="https://img.shields.io/github/v/release/wenlng/go-captcha.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha/blob/v2/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/stars/wenlng/go-captcha.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/last-commit/wenlng/go-captcha.svg"/></a>
 </div>
 
 <br/>
 
 > English | [中文](README_zh.md)
 
-<p style="text-align: center"><a href="https://github.com/wenlng/go-captcha">GoCaptcha</a> is a powerful, modular, and highly customizable behavioral CAPTCHA library that supports multiple interactive CAPTCHA types: Click, Slide, Drag-Drop, and Rotate.</p>
+<p style="text-align: center"><a href="https://github.com/feerichnii/go-captcha">GoCaptcha</a> is a powerful, modular, and highly customizable behavioral CAPTCHA library that supports multiple interactive CAPTCHA types: Click, Slide, Drag-Drop, and Rotate.</p>
 
 <p style="text-align: center"> ⭐️ If it helps you, please give a star.</p>
 
@@ -34,7 +34,7 @@
 | [online demo](http://gocaptcha.wencodes.com/demo/)                         | GoCaptcha Online Demo                                                                                                                                                                                     |
 | [go-captcha-example](https://github.com/wenlng/go-captcha-example)         | Golang + Web + APP Example                                                                                                                                                                                |
 | [go-captcha-assets](https://github.com/wenlng/go-captcha-assets)           | Embedded Resource Assets for Golang                                                                                                                                                                       |
-| [go-captcha](https://github.com/wenlng/go-captcha)                         | Golang CAPTCHA Library                                                                                                                                                                                    |
+| [go-captcha](https://github.com/feerichnii/go-captcha)                         | Golang CAPTCHA Library                                                                                                                                                                                    |
 | [go-captcha-jslib](https://github.com/wenlng/go-captcha-jslib)             | JavaScript CAPTCHA Library                                                                                                                                                                                |
 | [go-captcha-vue](https://github.com/wenlng/go-captcha-vue)                 | Vue CAPTCHA Library                                                                                                                                                                                       |
 | [go-captcha-react](https://github.com/wenlng/go-captcha-react)             | React CAPTCHA Library                                                                                                                                                                                     |
@@ -53,7 +53,7 @@
 - **Diverse CAPTCHA Types**: Supports Click, Slide, Rotate, and Drag behavioral CAPTCHAs, suitable for various interaction scenarios.
 - **Highly Customizable**: Flexible configuration of images, fonts, colors, angles, sizes, etc., through Options and Resources.
 - **Advanced Image Processing**: Built-in dynamic image generation and processing, supporting main images, thumbnails, puzzle pieces, and shadow effects.
-- **Anti-bot hardening** (this fork): `GetPublicData()` for client responses, crypto RNG for answers, image interference, HMAC challenge sealing — see [SECURITY.md](SECURITY.md).
+- **Anti-bot hardening** (this fork): `GetPublicData()` for client responses, crypto RNG for answers, image interference, and the `v2/antibot` layer (encrypted answers, atomic single-use challenges, client binding, rate limits, risk-based adaptive PoW) — see [SECURITY.md](SECURITY.md).
 - **Modular Architecture**: Clear code structure, adhering to Go best practices, making it easy to extend and maintain.
 - **High-Performance Design**: Optimized resource management and image generation, suitable for high-concurrency scenarios.
 - **Cross-Platform Compatibility**: Generated CAPTCHA images can be seamlessly integrated into web applications, mobile apps, or other systems requiring CAPTCHAs.
@@ -73,7 +73,7 @@
 
 ## Install
 ```shell
-$ go get -u github.com/wenlng/go-captcha/v2@latest
+$ go get -u github.com/feerichnii/go-captcha/v2@latest
 ```
 
 ## Import Module
@@ -81,7 +81,7 @@ $ go get -u github.com/wenlng/go-captcha/v2@latest
 package main
 
 // Import modules on demand
-import "github.com/wenlng/go-captcha/v2/${click|slide|rotate}"
+import "github.com/feerichnii/go-captcha/v2/${click|slide|rotate}"
 
 func main(){
    // ...
@@ -117,9 +117,9 @@ import (
 
 	"github.com/golang/freetype"
 	"github.com/golang/freetype/truetype"
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/click"
-	"github.com/wenlng/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/click"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
 var textCapt click.Captcha
@@ -325,9 +325,9 @@ import (
 	"log"
 	"io/ioutil"
 
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/slide"
-	"github.com/wenlng/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/slide"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
 var slideTileCapt slide.Captcha
@@ -516,8 +516,8 @@ import (
 	"log"
 	"io/ioutil"
 
-	"github.com/wenlng/go-captcha/v2/rotate"
-	"github.com/wenlng/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/rotate"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
 var rotateCapt rotate.Captcha

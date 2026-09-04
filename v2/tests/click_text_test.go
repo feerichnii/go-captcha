@@ -8,13 +8,16 @@ import (
 	"testing"
 
 	"github.com/golang/freetype/truetype"
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/click"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/click"
 )
 
 var textCapt click.Captcha
 
 func init() {
+	if !fixturesAvailable() {
+		return
+	}
 	builder := click.NewBuilder(
 		click.WithRangeLen(option.RangeVal{Min: 4, Max: 6}),
 		click.WithRangeVerifyLen(option.RangeVal{Min: 2, Max: 4}),
@@ -57,6 +60,7 @@ func init() {
 }
 
 func TestClickTextCaptcha(t *testing.T) {
+	requireFixtures(t)
 	captData, err := textCapt.Generate()
 	if err != nil {
 		log.Fatalln(err)

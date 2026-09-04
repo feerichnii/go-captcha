@@ -11,17 +11,20 @@ import (
 	"os"
 	"testing"
 
-	"github.com/wenlng/go-captcha/v2/base/canvas"
-	"github.com/wenlng/go-captcha/v2/base/codec"
-	"github.com/wenlng/go-captcha/v2/base/helper"
-	"github.com/wenlng/go-captcha/v2/base/option"
-	"github.com/wenlng/go-captcha/v2/click"
+	"github.com/feerichnii/go-captcha/v2/base/canvas"
+	"github.com/feerichnii/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/base/helper"
+	"github.com/feerichnii/go-captcha/v2/base/option"
+	"github.com/feerichnii/go-captcha/v2/click"
 	"golang.org/x/image/draw"
 )
 
 var shapeCapt click.Captcha
 
 func init() {
+	if !fixturesAvailable() {
+		return
+	}
 	builder := click.NewBuilder(
 		click.WithRangeLen(option.RangeVal{Min: 3, Max: 6}),
 		click.WithRangeVerifyLen(option.RangeVal{Min: 2, Max: 3}),
@@ -96,6 +99,7 @@ func getShapeMaps() map[string]image.Image {
 }
 
 func TestClickShapeCaptcha(t *testing.T) {
+	requireFixtures(t)
 	captData, err := shapeCapt.Generate()
 	if err != nil {
 		log.Fatalln(err)
@@ -122,6 +126,7 @@ func TestClickShapeCaptcha(t *testing.T) {
 }
 
 func TestScale(t *testing.T) {
+	requireFixtures(t)
 	shapeBytes4, err := ioutil.ReadFile("../.cache/shape4.png")
 	if err != nil {
 		log.Fatalln(err)

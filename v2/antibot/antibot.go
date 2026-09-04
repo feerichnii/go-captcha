@@ -11,7 +11,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/wenlng/go-captcha/v2/base/challenge"
+	"github.com/feerichnii/go-captcha/v2/base/challenge"
 )
 
 // Layer is the AntiBot facade over go-captcha generation (Issue/Verify).
