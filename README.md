@@ -12,7 +12,7 @@
 > English | [中文](README_zh.md)
 
 <p align="center">
-This is a <b>hardened fork</b> of <a href="https://github.com/wenlng/go-captcha">GoCaptcha</a> — a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It keeps all four interactive CAPTCHA types (<b>Click</b>, <b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, HMAC-sealed challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
+<b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides all four interactive CAPTCHA types (<b>Click</b>, <b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, HMAC-sealed challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
 </p>
 
 <p align="center"> ⭐️ If it helps you, please give it a star.</p>

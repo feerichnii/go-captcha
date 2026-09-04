@@ -11,7 +11,7 @@
 
 > [English](README.md) | 中文 
 <p align="center">
-本项目是 <a style="font-weight: bold" href="https://github.com/wenlng/go-captcha">GoCaptcha</a> 的<b>加固分支</b> —— 一个功能强大、模块化且高度可定制的 Golang 行为式验证码库。它保留了全部四种交互式验证码类型（<b>点选</b>、<b>滑动</b>、<b>拖拽</b> 和 <b>旋转</b>），并在其之上叠加了完整的 <b>AntiBot（反自动化）</b> 能力：答案仅保留在服务端、加密随机数、图像干扰、HMAC 密封挑战、行为轨迹评分、限流以及自适应工作量证明（PoW）。
+<b>GoCaptcha · AntiBot 加固版</b> 是一个功能强大、模块化且高度可定制的 Golang 行为式验证码库。它提供全部四种交互式验证码类型（<b>点选</b>、<b>滑动</b>、<b>拖拽</b> 和 <b>旋转</b>），并在其之上叠加了完整的 <b>AntiBot（反自动化）</b> 能力：答案仅保留在服务端、加密随机数、图像干扰、HMAC 密封挑战、行为轨迹评分、限流以及自适应工作量证明（PoW）。
 </p>
 
 <p align="center"> ⭐️ 如果能帮助到你，请随手给个 star</p>
