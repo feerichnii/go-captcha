@@ -76,9 +76,11 @@ The trajectory is client-supplied and can be fabricated or replayed. Therefore:
 
 Calibrate before tightening: feed `VerifyEvent.Score` with your own human/bot labels into `Calibrator` and use `Report().SuggestedRiskThreshold`.
 
-## Client-side PoW
+## Browser side
 
-`sha256(salt + ":" + nonce)` must have `difficulty` leading zero bits; nonce ≤ `MaxNonceLen` (64) bytes. Difficulty 14–22 is a few ms to a few hundred ms in browser JS/WASM.
+[`client/antibot-client.js`](client/) records the trajectory, solves PoW in Web Workers and posts the verify payload. HTTP handler example: [`example_http_test.go`](example_http_test.go).
+
+PoW contract: `sha256(salt + ":" + nonce)` must have `difficulty` leading zero bits; nonce ≤ `MaxNonceLen` (64) bytes.
 
 ## Store requirements
 
