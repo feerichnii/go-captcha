@@ -53,6 +53,7 @@
 - **Diverse CAPTCHA Types**: Supports Click, Slide, Rotate, and Drag behavioral CAPTCHAs, suitable for various interaction scenarios.
 - **Highly Customizable**: Flexible configuration of images, fonts, colors, angles, sizes, etc., through Options and Resources.
 - **Advanced Image Processing**: Built-in dynamic image generation and processing, supporting main images, thumbnails, puzzle pieces, and shadow effects.
+- **Anti-bot hardening** (this fork): `GetPublicData()` for client responses, crypto RNG for answers, image interference, HMAC challenge sealing — see [SECURITY.md](SECURITY.md).
 - **Modular Architecture**: Clear code structure, adhering to Go best practices, making it easy to extend and maintain.
 - **High-Performance Design**: Optimized resource management and image generation, suitable for high-concurrency scenarios.
 - **Cross-Platform Compatibility**: Generated CAPTCHA images can be seamlessly integrated into web applications, mobile apps, or other systems requiring CAPTCHAs.
@@ -191,6 +192,9 @@ func main() {
 		log.Fatalln(">>>>> generate err")
 	}
 
+	// Server-only: persist GetData() (or challenge.Seal). Never JSON this to the browser.
+	// Client-safe metadata:
+	// pub, _ := json.Marshal(captData.GetPublicData())
 	dots, _ := json.Marshal(dotData)
 	fmt.Println(">>>>> ", string(dots))
 

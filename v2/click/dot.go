@@ -12,7 +12,9 @@ import (
 	"github.com/golang/freetype/truetype"
 )
 
-// Dot represents a single point (character or shape) in the captcha
+// Dot represents a single point (character or shape) in the captcha.
+// Fields tagged json are for server-side persistence only — never marshal
+// Dot / GetData() into a client-facing API response. Use PublicDot instead.
 type Dot struct {
 	Index  int    `json:"index"`
 	X      int    `json:"x"`
@@ -25,6 +27,11 @@ type Dot struct {
 	Angle  int    `json:"angle"`
 	Color  string `json:"color"`
 	Color2 string `json:"color2"`
+}
+
+// PublicDot is safe to send to clients (no coordinates or labels).
+type PublicDot struct {
+	Index int `json:"index"`
 }
 
 // DrawDot represents the dot data used for drawing

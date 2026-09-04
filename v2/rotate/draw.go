@@ -8,9 +8,12 @@ package rotate
 
 import (
 	"image"
+	"image/color"
+	"math"
 
 	"github.com/wenlng/go-captcha/v2/base/canvas"
 	"github.com/wenlng/go-captcha/v2/base/randgen"
+	"github.com/wenlng/go-captcha/v2/base/random"
 	"golang.org/x/image/draw"
 )
 
@@ -95,5 +98,63 @@ func (d *drawImage) DrawWithNRGBA(params *DrawImageParams) (img image.Image, err
 	}
 
 	rcm.CropCircle(rcm.Bounds().Dx()/2, rcm.Bounds().Dy()/2, rcm.Bounds().Dy()/2)
+	addRotateRingNoise(rcm.Get())
 	return rcm.Get(), nil
+}
+
+// addRotateRingNoise adds subtle rim noise to make angular correlation harder.
+func addRotateRingNoise(img *image.NRGBA) {
+	if img == nil {
+		return
+	}
+	b := img.Bounds()
+	cx := (b.Min.X + b.Max.X) / 2
+	cy := (b.Min.Y + b.Max.Y) / 2
+	rOuter := b.Dx() / 2
+	rInner := rOuter - 6
+	if rInner < 10 {
+		return
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			dx := float64(x - cx)
+			dy := float64(y - cy)
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist < float64(rInner) || dist > float64(rOuter) {
+				continue
+			}
+			if random.RandIntFast(0, 100) > 35 {
+				continue
+			}
+			p := img.NRGBAAt(x, y)
+			if p.A == 0 {
+				continue
+			}
+			delta := random.RandIntFast(-22, 22)
+			p.R = clampU8(int(p.R) + delta)
+			p.G = clampU8(int(p.G) + delta)
+			p.B = clampU8(int(p.B) + delta)
+			img.SetNRGBA(x, y, p)
+		}
+	}
+	ticks := random.RandIntFast(6, 14)
+	for i := 0; i < ticks; i++ {
+		ang := float64(random.RandIntFast(0, 359)) * math.Pi / 180
+		x := cx + int(float64(rOuter-2)*math.Cos(ang))
+		y := cy + int(float64(rOuter-2)*math.Sin(ang))
+		if x < b.Min.X || x >= b.Max.X || y < b.Min.Y || y >= b.Max.Y {
+			continue
+		}
+		img.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: 90})
+	}
+}
+
+func clampU8(v int) uint8 {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return uint8(v)
 }

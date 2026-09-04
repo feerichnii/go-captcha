@@ -106,6 +106,8 @@ func (d *drawImage) DrawWithNRGBA(params *DrawImageParams) (image.Image, error) 
 	draw.Draw(m.Get(), b, img, point, draw.Src)
 	draw.Draw(m.Get(), cvs.Bounds(), cvs, image.Point{}, draw.Over)
 	m.SubImage(image.Rect(0, 0, params.Width, params.Height))
+	// Interference raises OCR / contour cost on the master image.
+	d.addMasterInterference(m.Get(), params.Width, params.Height)
 	return m, nil
 }
 
@@ -308,6 +310,95 @@ func (d *drawImage) randomFillWithCircles(m canvas.Palette, n, maxRadius int, co
 		r := random.RandIntFast(1, maxRadius)
 		m.DrawCircle(random.RandIntFast(r, maxx-r), random.RandIntFast(r, maxy-r), r, co)
 	}
+}
+
+// addMasterInterference adds light noise lines and alpha speckles to reduce clean OCR.
+func (d *drawImage) addMasterInterference(img *image.NRGBA, width, height int) {
+	if img == nil || width <= 0 || height <= 0 {
+		return
+	}
+	lineCount := random.RandIntFast(4, 8)
+	for i := 0; i < lineCount; i++ {
+		x0 := random.RandIntFast(0, width-1)
+		y0 := random.RandIntFast(0, height-1)
+		x1 := random.RandIntFast(0, width-1)
+		y1 := random.RandIntFast(0, height-1)
+		a := uint8(random.RandIntFast(28, 70))
+		c := color.NRGBA{
+			R: uint8(random.RandIntFast(20, 90)),
+			G: uint8(random.RandIntFast(20, 90)),
+			B: uint8(random.RandIntFast(20, 90)),
+			A: a,
+		}
+		drawLineNRGBA(img, x0, y0, x1, y1, c)
+	}
+	speckles := width * height / 180
+	for i := 0; i < speckles; i++ {
+		x := random.RandIntFast(0, width-1)
+		y := random.RandIntFast(0, height-1)
+		p := img.NRGBAAt(x, y)
+		delta := int(random.RandIntFast(-18, 18))
+		p.R = clampUint8(int(p.R) + delta)
+		p.G = clampUint8(int(p.G) + delta)
+		p.B = clampUint8(int(p.B) + delta)
+		img.SetNRGBA(x, y, p)
+	}
+}
+
+func clampUint8(v int) uint8 {
+	if v < 0 {
+		return 0
+	}
+	if v > 255 {
+		return 255
+	}
+	return uint8(v)
+}
+
+// drawLineNRGBA draws a thin semi-transparent line (Bresenham).
+func drawLineNRGBA(img *image.NRGBA, x0, y0, x1, y1 int, c color.NRGBA) {
+	dx := int(math.Abs(float64(x1 - x0)))
+	dy := -int(math.Abs(float64(y1 - y0)))
+	sx := 1
+	if x0 >= x1 {
+		sx = -1
+	}
+	sy := 1
+	if y0 >= y1 {
+		sy = -1
+	}
+	err := dx + dy
+	for {
+		blendNRGBA(img, x0, y0, c)
+		if x0 == x1 && y0 == y1 {
+			break
+		}
+		e2 := 2 * err
+		if e2 >= dy {
+			err += dy
+			x0 += sx
+		}
+		if e2 <= dx {
+			err += dx
+			y0 += sy
+		}
+	}
+}
+
+func blendNRGBA(img *image.NRGBA, x, y int, overlay color.NRGBA) {
+	b := img.Bounds()
+	if x < b.Min.X || x >= b.Max.X || y < b.Min.Y || y >= b.Max.Y {
+		return
+	}
+	base := img.NRGBAAt(x, y)
+	a := float64(overlay.A) / 255
+	inv := 1 - a
+	img.SetNRGBA(x, y, color.NRGBA{
+		R: uint8(float64(base.R)*inv + float64(overlay.R)*a),
+		G: uint8(float64(base.G)*inv + float64(overlay.G)*a),
+		B: uint8(float64(base.B)*inv + float64(overlay.B)*a),
+		A: base.A,
+	})
 }
 
 // randomDrawSlimLine draws slim lines randomly

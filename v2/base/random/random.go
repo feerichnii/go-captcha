@@ -16,12 +16,11 @@ import (
 )
 
 var (
-	// randPool is a pool of random number generators to avoid lock contention
+	// randPool is a pool of random number generators to avoid lock contention.
+	// Each generator is seeded from crypto/rand when available.
 	randPool = sync.Pool{
 		New: func() interface{} {
-			seed := time.Now().UnixNano() + int64(rand.Uint32())
-			src := rand.NewSource(seed)
-			return rand.New(src)
+			return rand.New(rand.NewSource(cryptoSeed()))
 		},
 	}
 
@@ -30,11 +29,18 @@ var (
 	once sync.Once
 )
 
+// cryptoSeed returns a 63-bit seed from crypto/rand (falls back to time).
+func cryptoSeed() int64 {
+	n, err := rand2.Int(rand2.Reader, big.NewInt(math.MaxInt64))
+	if err != nil {
+		return time.Now().UnixNano()
+	}
+	return n.Int64()
+}
+
 // initRnd initializes the global random number generator (deprecated, use getPooledRnd instead)
 func initRnd() {
-	seed := time.Now().UnixNano()
-	src := rand.NewSource(seed)
-	rnd = rand.New(src)
+	rnd = rand.New(rand.NewSource(cryptoSeed()))
 }
 
 // getRnd returns the global random number generator (deprecated, use getPooledRnd instead)
@@ -75,8 +81,25 @@ func Rand31n(ri int32) int32 {
 	return r.Int31n(ri)
 }
 
-// Perm generates a random permutation (thread-safe, high-performance)
+// Perm generates a random permutation using crypto/rand (Fisher–Yates).
+// Prefer this for captcha answer ordering; use PermFast for cosmetics only.
 func Perm(n int) []int {
+	if n <= 0 {
+		return nil
+	}
+	p := make([]int, n)
+	for i := 0; i < n; i++ {
+		p[i] = i
+	}
+	for i := n - 1; i > 0; i-- {
+		j := RandInt(0, i)
+		p[i], p[j] = p[j], p[i]
+	}
+	return p
+}
+
+// PermFast generates a random permutation (thread-safe, math/rand pool)
+func PermFast(n int) []int {
 	if n <= 0 {
 		return nil
 	}

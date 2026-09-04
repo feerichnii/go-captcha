@@ -20,12 +20,12 @@ func defaultOptions() Option {
 			DeadZoneDirectionTypeRight,
 			DeadZoneDirectionTypeBottom,
 			DeadZoneDirectionTypeTop,
-			3,
 		}
 
-		opts.genGraphNumber = 1
+		// Multiple decoy shadows raise template-matching cost.
+		opts.genGraphNumber = 3
 		opts.rangeGraphAnglePos = []*option.RangeVal{
-			{Min: 0, Max: 0},
+			{Min: -8, Max: 8},
 		}
 		opts.rangeGraphSize = &option.RangeVal{Min: 60, Max: 70}
 	}
