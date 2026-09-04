@@ -45,6 +45,17 @@ token, _ := challenge.SealWithTTL(serverKey, challenge.Payload{
 - JPEG defaults use quality level 2 (85) instead of 100
 - `challenge.Seal` / `Open` HMAC helpers for opaque answer tokens
 
-## Still out of scope (use your service layer)
+## AntiBot layer (`v2/antibot`)
 
-IP rate limits, WAF, behavioral trajectory checks, ML risk scores, Redis clustering — use [go-captcha-service](https://github.com/wenlng/go-captcha-service) or your own API.
+Use [`v2/antibot`](v2/antibot) to wrap generation with:
+
+- Challenge Manager (crypto ID, Redis/Memory, TTL 90s, max 3 attempts, single-use)
+- Trajectory behavior scoring
+- Per-client rate limiting
+- Adaptive PoW for suspicious clients
+
+See [v2/antibot/README.md](v2/antibot/README.md).
+
+## Still out of scope
+
+HTTP/gRPC service, WAF, ML risk models — wire those in your app or [go-captcha-service](https://github.com/wenlng/go-captcha-service).
