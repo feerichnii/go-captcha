@@ -13,17 +13,14 @@ import (
 var rotateCapt rotate.Captcha
 
 func init() {
-	if !fixturesAvailable() {
-		return
-	}
 	builder := rotate.NewBuilder()
 
-	bgImage, err := loadPng("../.cache/bg.png")
+	bgImage, err := loadPng("../resources/backgrounds/bg_foliage.png")
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	bgImage1, err := loadPng("../.cache/bg1.png")
+	bgImage1, err := loadPng("../resources/backgrounds/bg_graffiti.png")
 	if err != nil {
 		log.Fatalln(err)
 	}
@@ -39,7 +36,6 @@ func init() {
 }
 
 func TestRotateDirectionCaptcha(t *testing.T) {
-	requireFixtures(t)
 	captData, err := rotateCapt.Generate()
 	if err != nil {
 		log.Fatalln(err)

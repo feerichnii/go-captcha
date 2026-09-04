@@ -10,19 +10,28 @@ import (
 	"github.com/feerichnii/go-captcha/v2/base/codec"
 )
 
-// fixtureDir holds sample fonts/backgrounds (git-ignored). These demo tests
-// are skipped when it is absent so `go test ./...` stays green in CI.
+// Backgrounds ship in ../resources/backgrounds. Fonts, click shapes and slide
+// tile graphs are sample assets that live in the git-ignored fixtureDir; demo
+// tests that need them are skipped when it is absent so `go test ./...` stays
+// green in CI.
 const fixtureDir = "../.cache"
 
+// fixturesAvailable reports whether the optional sample assets are present.
+// The directory alone is not enough (tooling may create an empty one), so a
+// representative file from each demo is checked.
 func fixturesAvailable() bool {
-	_, err := os.Stat(fixtureDir + "/bg.png")
-	return err == nil
+	for _, f := range []string{"yrdzst-bold.ttf", "shape1.png", "tile-1.png"} {
+		if _, err := os.Stat(fixtureDir + "/" + f); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func requireFixtures(t *testing.T) {
 	t.Helper()
 	if !fixturesAvailable() {
-		t.Skipf("fixtures missing in %s; see README for sample assets", fixtureDir)
+		t.Skipf("optional sample assets missing in %s (fonts / shapes / tile graphs)", fixtureDir)
 	}
 }
 

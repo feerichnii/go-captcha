@@ -1,33 +1,42 @@
 <div align="center">
-<img width="120" style="padding-top: 50px; margin: 0;" src="https://github.com/wenlng/git-assets/blob/master/go-captcha/gocaptcha_logo.svg?raw=true"/>
-<h1 style="margin: 0; padding: 0">GoCaptcha</h1>
-<p>Golang 行为验证码</p>
+<img width="140" style="padding-top: 40px; margin: 0;" src="assets/gocaptcha_antibot_logo.png" alt="GoCaptcha AntiBot Edition logo"/>
+<h1 style="margin: 0; padding: 0">GoCaptcha · AntiBot 加固版</h1>
+<p>面向 Golang 的加固型行为验证码</p>
 <a href="https://goreportcard.com/report/github.com/feerichnii/go-captcha"><img src="https://goreportcard.com/badge/github.com/feerichnii/go-captcha"/></a>
 <a href="https://godoc.org/github.com/feerichnii/go-captcha"><img src="https://godoc.org/github.com/feerichnii/go-captcha?status.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha/releases"><img src="https://img.shields.io/github/v/release/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha/blob/v2/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/stars/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/last-commit/wenlng/go-captcha.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha/blob/master/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
 </div>
 
 <br/>
 
 > [English](README.md) | 中文 
-<p style="text-align: center">
-<a style="font-weight: bold" href="https://github.com/feerichnii/go-captcha">Go Captcha</a> 是功能强大、模块化且高度可定制的行为式验证码库，支持多种交互式验证码类型：点选（Click）、滑动（Slide）、拖拽（Drag-Drop） 和 旋转（Rotate）。
+<p align="center">
+<b>GoCaptcha · AntiBot 加固版</b> 是一个功能强大、模块化且高度可定制的 Golang 行为式验证码库。它提供全部四种交互式验证码类型（<b>点选</b>、<b>滑动</b>、<b>拖拽</b> 和 <b>旋转</b>），并在其之上叠加了完整的 <b>AntiBot（反自动化）</b> 能力：答案仅保留在服务端、加密随机数、图像干扰、AEAD 加密挑战、行为轨迹评分、限流以及自适应工作量证明（PoW）。
 </p>
 
-<p style="text-align: center"> ⭐️ 如果能帮助到你，请随手给点一个star</p>
-<p style="text-align: center">QQ交流群：178498936</p>
+<p align="center"> ⭐️ 如果能帮助到你，请随手给个 star</p>
 
 <br/>
 
 <div align="center">
-<img src="https://github.com/wenlng/git-assets/blob/master/go-captcha/go-captcha-v2.jpg?raw=true" alt="Poster">
+<img src="assets/gocaptcha_antibot_poster.png" alt="GoCaptcha AntiBot Edition poster">
 </div>
 
 <br/>
 <hr/>
+<br/>
+
+## 本次构建的新增内容
+
+本加固版在不改变原有 API 使用习惯的前提下，让验证码更难被自动化程序破解。相较上游 GoCaptcha，新增三大能力：
+
+- **默认更安全的答案处理** —— `GetPublicData()` 只返回浏览器所需、且不含答案的元数据；真实答案（`GetData()`）无需离开服务端，也可通过 [`v2/base/challenge`](v2) 由 `antibot` 层以 AES-256-GCM 加密存储，或密封为不透明的 AEAD 令牌。
+- **抗破解的图像与随机数加固** —— 答案坐标改用 `crypto/rand` 生成，JPEG 主图叠加干扰噪点，滑块加入诱饵阴影与边缘抖动，旋转主图加入圆环噪点，点选缩略图默认形变。详见 [SECURITY.md](SECURITY.md)。
+- **`antibot` 编排层** —— 开箱即用的编排包（[`v2/antibot`](v2/antibot)），负责挑战生命周期（加密 ID、TTL、单次使用、尝试次数上限）、指针轨迹评分、按客户端限流，并对可疑客户端下发自适应 PoW。支持内存或 Redis 存储。
+- **内置高复杂度背景图** —— 在 [`v2/resources/backgrounds`](v2/resources/backgrounds) 内置了一组高熵、细节密集的全新背景图，让主图默认就更难被 OCR/轮廓类自动化程序分割识别。
+
+> 直接跳转到 [AntiBot 反自动化层](#-antibot-反自动化层) 或完整的 [安全说明](SECURITY.md)。
+
 <br/>
 
 ## 项目生态
@@ -55,6 +64,8 @@
 ## 核心特性
 
 - **多样化验证码类型**：支持点选、滑动、旋转和拖拽四种行为式验证码，适应不同交互场景。
+- **默认抗自动化**：答案使用加密随机数生成、图像干扰/诱饵，并对公开数据与秘密答案做拆分，答案永不下发到浏览器。
+- **完整 AntiBot 编排**：挑战生命周期、轨迹评分、限流与自适应 PoW，统一封装在 [`antibot`](v2/antibot) 包中。
 - **高度可定制化**：通过选项（`Options`）和资源（`Resources`）支持图像、字体、颜色、角度、大小等灵活配置。
 - **高级图像处理**：内置动态图像生成和处理功能，支持主图像、缩略图、拼图块和阴影效果的生成。
 - **模块化架构**：代码结构清晰，遵循 Go 语言最佳实践，易于扩展和维护。
@@ -651,6 +662,65 @@ func loadPng(p string) (image.Image, error) {
 - 缩略图会自动应用圆形裁剪效果，确保背景图像分辨率足够以避免模糊。
 
 <br/>
+<hr/>
+
+## 🛡 AntiBot 反自动化层
+
+[`v2/antibot`](v2/antibot) 包在验证码的生成与校验之外，提供了一整套反自动化流水线：答案始终保留在服务端，可疑客户端则会被施加额外阻力。
+
+```
+AntiBot layer
+├── 挑战管理器（Challenge Manager）  加密 ID、Redis/内存、TTL 90s、最多 3 次尝试、单次使用
+├── 轨迹采集（Trajectory Collector）  x,y,t + 指针事件（客户端 → 服务端）
+├── 行为评分（Behavior Scoring）      时长、速度、加速度、时序、纠偏
+├── 限流器（Rate Limiter）           按客户端 key 限流
+└── 自适应挑战（Adaptive Challenge）  对可疑客户端下发 PoW
+```
+
+### 快速开始
+```go
+import (
+    "encoding/json"
+    "time"
+
+    "github.com/feerichnii/go-captcha/v2/antibot"
+    "github.com/feerichnii/go-captcha/v2/slide"
+    // "github.com/redis/go-redis/v9"
+)
+
+store := antibot.NewMemoryStore()
+// 或：antibot.NewRedisStore(redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"}))
+
+layer, err := antibot.New(store, antibot.Config{
+    SecretKey:   []byte(os.Getenv("CAPTCHA_SECRET")), // 必填
+    TTL:         90 * time.Second,
+    MaxAttempts: 3,
+})
+
+// slide.Generate() 之后：
+answer, _ := json.Marshal(captData.GetData()) // 仅服务端使用
+iss, err := layer.Issue(ctx, antibot.IssueRequest{
+    Kind:       antibot.KindSlide,
+    Answer:     answer,
+    ClientKey:  clientIP,
+    Suspicious: false,
+})
+// 客户端获得：iss.ID、captData.GetPublicData()、图像、iss.PoW（可选）
+
+res, err := layer.Verify(ctx, antibot.VerifyRequest{
+    ID:         iss.ID,
+    Answer:     mustJSON(antibot.SlideSubmit{X: ux, Y: uy}),
+    Trajectory: antibot.Trajectory{Points: points, Events: events},
+    PoWNonce:   nonce, // 当 iss.PoW != nil 时
+})
+```
+
+> 切勿将 `GetData()` / 存储的 `Answer` 发送到浏览器 —— 只发送 `GetPublicData()` 和图像。
+
+完整 API、Redis 接入与评分细节见 [`v2/antibot/README.md`](v2/antibot/README.md)。
+
+<br/>
+<hr/>
 
 ## 验证码图像
 

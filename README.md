@@ -1,29 +1,55 @@
 <div align="center">
-<img width="120" style="padding-top: 50px; margin: 0;" src="https://github.com/wenlng/git-assets/blob/master/go-captcha/gocaptcha_logo.svg?raw=true"/>
-<h1 style="margin: 0; padding: 0">GoCaptcha</h1>
-<p>Behavior Captcha Of Golang</p>
+<img width="140" style="padding-top: 40px; margin: 0;" src="assets/gocaptcha_antibot_logo.png" alt="GoCaptcha AntiBot Edition logo"/>
+<h1 style="margin: 0; padding: 0">GoCaptcha · AntiBot Edition</h1>
+<p>Hardened behavioral CAPTCHA for Golang</p>
 <a href="https://goreportcard.com/report/github.com/feerichnii/go-captcha"><img src="https://goreportcard.com/badge/github.com/feerichnii/go-captcha"/></a>
 <a href="https://godoc.org/github.com/feerichnii/go-captcha"><img src="https://godoc.org/github.com/feerichnii/go-captcha?status.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha/releases"><img src="https://img.shields.io/github/v/release/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha/blob/v2/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/stars/wenlng/go-captcha.svg"/></a>
-<a href="https://github.com/feerichnii/go-captcha"><img src="https://img.shields.io/github/last-commit/wenlng/go-captcha.svg"/></a>
+<a href="https://github.com/feerichnii/go-captcha/blob/master/LICENSE"><img src="https://img.shields.io/badge/License-Apache2.0-green.svg"/></a>
 </div>
 
 <br/>
 
 > English | [中文](README_zh.md)
 
-<p style="text-align: center"><a href="https://github.com/feerichnii/go-captcha">GoCaptcha</a> is a powerful, modular, and highly customizable behavioral CAPTCHA library that supports multiple interactive CAPTCHA types: Click, Slide, Drag-Drop, and Rotate.</p>
+<p align="center">
+<b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides all four interactive CAPTCHA types (<b>Click</b>, <b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, AEAD-encrypted challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
+</p>
 
-<p style="text-align: center"> ⭐️ If it helps you, please give a star.</p>
+<p align="center"> ⭐️ If it helps you, please give it a star.</p>
 
 <div align="center"> 
-<img src="https://github.com/wenlng/git-assets/blob/master/go-captcha/go-captcha-v2.jpg?raw=true" alt="Poster">
+<img src="assets/gocaptcha_antibot_poster.png" alt="GoCaptcha AntiBot Edition poster">
 </div>
 
 <br/>
 <hr/>
+<br/>
+
+## What's new in this build
+
+This edition focuses on making the CAPTCHA hard for automated solvers without changing the ergonomics of the original API. Three things ship on top of upstream GoCaptcha:
+
+- **Safer-by-default answers** — `GetPublicData()` returns everything the browser needs and nothing it shouldn't. The real answer (`GetData()`) never has to leave the server, and can be encrypted at rest (AES-256-GCM) by the `antibot` layer or sealed into an opaque AEAD token via [`v2/base/challenge`](v2/base/challenge).
+- **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get decoy shadows and edge jitter, rotate masters get rim noise, and click thumbnails are deformed by default. See [SECURITY.md](SECURITY.md).
+- **The `antibot` layer** — a drop-in orchestration package ([`v2/antibot`](v2/antibot)) that manages the challenge lifecycle (crypto ID, TTL, single-use, attempt caps), scores pointer trajectories, rate-limits per client, and issues adaptive proof-of-work to suspicious clients. Backed by in-memory or Redis storage.
+- **Bundled high-complexity backgrounds** — a fresh set of dense, high-entropy background images ships under [`v2/resources/backgrounds`](v2/resources/backgrounds), so masters are harder to segment for OCR/contour-based solvers out of the box.
+
+| Capability            | Upstream | AntiBot Edition |
+|-----------------------|:--------:|:---------------:|
+| Click / Slide / Drag / Rotate | ✅ | ✅ |
+| Public vs. secret data split  | –  | ✅ `GetPublicData()` |
+| Crypto RNG for answers        | –  | ✅ |
+| Image interference / decoys   | –  | ✅ |
+| Encrypted answers / AEAD tokens | –  | ✅ AES-256-GCM |
+| Atomic single-use + attempts   | –  | ✅ `Incr` / `GETDEL` |
+| Client binding + verify limits | –  | ✅ |
+| Challenge lifecycle manager    | –  | ✅ `antibot` |
+| Trajectory behavior scoring    | –  | ✅ |
+| Per-client rate limiting       | –  | ✅ |
+| Adaptive proof-of-work         | –  | ✅ |
+
+> Jump straight to the [AntiBot layer](#-antibot-layer) or the full [security notes](SECURITY.md).
+
 <br/>
 
 ## Ecosystem
@@ -51,9 +77,10 @@
 ## Core Features
 
 - **Diverse CAPTCHA Types**: Supports Click, Slide, Rotate, and Drag behavioral CAPTCHAs, suitable for various interaction scenarios.
+- **Bot-resistant by design**: Cryptographic answer randomness, image interference/decoys, and a public/secret data split so answers never reach the browser.
+- **Full AntiBot orchestration**: Challenge lifecycle, trajectory scoring, rate limiting, and adaptive proof-of-work in a single [`antibot`](v2/antibot) package.
 - **Highly Customizable**: Flexible configuration of images, fonts, colors, angles, sizes, etc., through Options and Resources.
 - **Advanced Image Processing**: Built-in dynamic image generation and processing, supporting main images, thumbnails, puzzle pieces, and shadow effects.
-- **Anti-bot hardening** (this fork): `GetPublicData()` for client responses, crypto RNG for answers, image interference, and the `v2/antibot` layer (encrypted answers, atomic single-use challenges, client binding, rate limits, risk-based adaptive PoW) — see [SECURITY.md](SECURITY.md).
 - **Modular Architecture**: Clear code structure, adhering to Go best practices, making it easy to extend and maintain.
 - **High-Performance Design**: Optimized resource management and image generation, suitable for high-concurrency scenarios.
 - **Cross-Platform Compatibility**: Generated CAPTCHA images can be seamlessly integrated into web applications, mobile apps, or other systems requiring CAPTCHAs.
@@ -269,15 +296,18 @@ func main() {
 ### Captcha Data
 > captData, err := capt.Generate()
 
-| Method                                   | Desc                  |
-|------------------------------------------|-----------------------|
-| GetData() map[int]*Dot                   | Get verification data |
-| GetMasterImage() imagedata.JPEGImageData | Get main image        |
-| GetThumbImage() imagedata.PNGImageData   | Get thumbnail         |
+| Method                                   | Desc                                                   |
+|------------------------------------------|--------------------------------------------------------|
+| GetData() map[int]*Dot                   | Get verification data (**server-only**, secret answer) |
+| GetPublicData() interface{}              | Get client-safe metadata (no answer)                   |
+| GetMasterImage() imagedata.JPEGImageData | Get main image                                         |
+| GetThumbImage() imagedata.PNGImageData   | Get thumbnail                                          |
 
 
 ### Validate the captcha
 > ok := click.Validate(srcX, srcY, X, Y, width, height, paddingValue)
+
+For ordered click verification (recommended, resists brute force), use `click.ValidateOrdered`.
 
 | Params       | Desc                  |
 |--------------|-----------------------|
@@ -464,11 +494,12 @@ func loadPng(p string) (image.Image, error) {
 
 > captData, err := capt.Generate()
 
-| Method                                   | Desc                  |
-|------------------------------------------|-----------------------|
-| GetData() *Block                         | Get verification data |
-| GetMasterImage() imagedata.JPEGImageData | Get main image        |
-| GetTileImage() imagedata.PNGImageData    | Get tile image        |
+| Method                                   | Desc                                                   |
+|------------------------------------------|--------------------------------------------------------|
+| GetData() *Block                         | Get verification data (**server-only**, secret answer) |
+| GetPublicData() interface{}              | Get client-safe metadata (no answer)                   |
+| GetMasterImage() imagedata.JPEGImageData | Get main image                                         |
+| GetTileImage() imagedata.PNGImageData    | Get tile image                                         |
 
 
 ### Validate the captcha
@@ -618,11 +649,12 @@ func loadPng(p string) (image.Image, error) {
 ### Captcha Data
 > captData, err := capt.Generate()
 
-| Method                                   | Desc                  |
-|------------------------------------------|-----------------------|
-| GetData() *Block                         | Get verification data |
-| GetMasterImage() imagedata.PNGImageData  | Get main image        |
-| GetThumbImage() imagedata.PNGImageData   | Get thumbnail         |
+| Method                                   | Desc                                                   |
+|------------------------------------------|--------------------------------------------------------|
+| GetData() *Block                         | Get verification data (**server-only**, secret answer) |
+| GetPublicData() interface{}              | Get client-safe metadata (no answer)                   |
+| GetMasterImage() imagedata.PNGImageData  | Get main image                                         |
+| GetThumbImage() imagedata.PNGImageData   | Get thumbnail                                          |
 
 ### Validate the captcha
 > ok := rotate.Validate(srcAngle, angle, paddingValue)
@@ -644,6 +676,68 @@ func loadPng(p string) (image.Image, error) {
 <br/>
 <hr/>
 
+## 🛡 AntiBot layer
+
+The [`v2/antibot`](v2/antibot) package wraps CAPTCHA generation and verification with a full anti-automation pipeline, so answers stay on the server and suspicious clients get extra friction.
+
+```
+AntiBot layer
+├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, atomic attempts (3), atomic single-use
+├── Answer storage      AES-256-GCM bound to challenge id — never plaintext, never sent to client
+├── Client binding      challenge usable only by the session/client that requested it
+├── Trajectory scoring  duration, velocity, acceleration, timing, corrections → risk signal
+├── Rate Limiter        per client key, on Issue and Verify
+├── Server-side timing  MinSolveTime, trajectory-vs-elapsed consistency, input size caps
+├── Adaptive PoW        persistent per-client risk level → difficulty escalation
+└── Browser client      client/antibot-client.js: trajectory tracker + Web Worker PoW solver
+```
+
+### Quick start
+```go
+import (
+    "encoding/json"
+    "os"
+    "time"
+
+    "github.com/feerichnii/go-captcha/v2/antibot"
+    "github.com/feerichnii/go-captcha/v2/slide"
+    "github.com/redis/go-redis/v9"
+)
+
+rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
+layer, err := antibot.New(antibot.NewRedisStore(rdb), antibot.Config{
+    SecretKey:   []byte(os.Getenv("CAPTCHA_SECRET")), // required
+    TTL:         90 * time.Second,
+    MaxAttempts: 3,
+})
+
+// After slide.Generate():
+answer, _ := json.Marshal(captData.GetData()) // secret; encrypted at rest
+iss, err := layer.Issue(ctx, antibot.IssueRequest{
+    Kind:      antibot.KindSlide,
+    Answer:    answer,
+    ClientKey: sessionID, // same key must be used at Verify
+})
+// Client gets: iss.ID, captData.GetPublicData(), images, iss.PoW (when the client is risky)
+
+res, err := layer.Verify(ctx, antibot.VerifyRequest{
+    ID:         iss.ID,
+    ClientKey:  sessionID,
+    Answer:     mustJSON(antibot.SlideSubmit{X: ux, Y: uy}),
+    Trajectory: antibot.Trajectory{Points: points, Events: events},
+    PoWNonce:   nonce, // required if iss.PoW != nil
+})
+// res.Score is a risk signal, not proof of humanity; res.RequirePoWNext tells you the next issue carries PoW
+```
+
+> Never send `GetData()` / the stored `Answer` to the browser — only `GetPublicData()`, images and `PoW{salt,difficulty}`.
+> Browser side: [`v2/antibot/client`](v2/antibot/client). HTTP handlers: [`example_http_test.go`](v2/antibot/example_http_test.go).
+
+See [`v2/antibot/README.md`](v2/antibot/README.md) for the full API, Redis wiring, and scoring details.
+
+<br/>
+<hr/>
+
 ## Captcha Image Data
 ### Object Method Of JPEGImageData
 
@@ -659,7 +753,6 @@ func loadPng(p string) (image.Image, error) {
 | SaveToFile(filepath string, quality int) error             |      |
 
 
-
 ### Object Method Of PNGImageData
 
 | Method                                    | Desc |
@@ -670,6 +763,20 @@ func loadPng(p string) (image.Image, error) {
 | ToBase64Data() (string, error)            |      |
 | SaveToFile(filepath string) error         |      |
 
+
+<br/>
+
+## Security
+
+Bot resistance depends on how you wire the library into your app. The essentials:
+
+1. **Never return `GetData()` to clients** — use `GetPublicData()` in API responses, and hand the answer to `antibot.Issue` (encrypted at rest) or seal it with `challenge.Seal` (AEAD).
+2. **Expire and single-use challenges** — short TTLs, delete after first successful verify.
+3. **Cap attempts and rate-limit** — the [`antibot`](v2/antibot) layer does both out of the box.
+4. **Prefer ordered click validation** — `click.ValidateOrdered` over unordered checks.
+5. **Use diverse assets** — many backgrounds/graphics make solver training harder.
+
+Full details and the rationale behind every hardening change live in [SECURITY.md](SECURITY.md).
 
 <br/>
 
