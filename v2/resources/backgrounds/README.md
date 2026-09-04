@@ -10,6 +10,10 @@ of OCR / contour-based solvers.
 | `bg_foliage.png`  | Close-up tropical foliage               |
 | `bg_circuit.png`  | Macro circuit board                     |
 | `bg_graffiti.png` | Abstract graffiti splatter              |
+| `bg_agate.png`    | Swirling agate / marble mineral veins   |
+| `bg_autumn.png`   | Carpet of overlapping autumn leaves     |
+| `bg_yarn.png`     | Tangled multicolor yarn strands         |
+| `bg_city.png`     | High aerial view of a dense city        |
 
 All images are `720x540` RGB PNG. The library randomly crops a master-sized region
 (default `300x220`) from each background, so larger source images add positional variety.
