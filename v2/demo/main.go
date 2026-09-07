@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/feerichnii/go-captcha/v2/antibot"
@@ -43,18 +44,26 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	// Slide needs dense landmarks so humans can tell which notch matches the tile.
+	// Scenic skies/water (coast, desert, lakeside) stay available for rotate.
+	slideBgs := filterBackgrounds(bgs, []string{
+		"bg_fruit", "bg_toys", "bg_forest", "bg_flowers",
+	})
+	if len(slideBgs) == 0 {
+		slideBgs = bgs
+	}
 	graphs := synthGraphs()
 
 	slideBasic := slide.NewBuilder(
 		slide.WithRangeGraphSize(option.RangeVal{Min: 64, Max: 70}),
 	)
-	slideBasic.SetResources(slide.WithBackgrounds(bgs), slide.WithGraphImages(graphs))
+	slideBasic.SetResources(slide.WithBackgrounds(slideBgs), slide.WithGraphImages(graphs))
 	slideCapt := slideBasic.Make()
 
 	slideDrag := slide.NewBuilder(
 		slide.WithRangeGraphSize(option.RangeVal{Min: 64, Max: 70}),
 	)
-	slideDrag.SetResources(slide.WithBackgrounds(bgs), slide.WithGraphImages(graphs))
+	slideDrag.SetResources(slide.WithBackgrounds(slideBgs), slide.WithGraphImages(graphs))
 	dragCapt := slideDrag.MakeWithRegion()
 
 	rotBuilder := rotate.NewBuilder()
@@ -240,6 +249,7 @@ func loadBackgrounds() ([]image.Image, error) {
 		return nil, err
 	}
 	var out []image.Image
+	var names []string
 	for _, e := range entries {
 		if e.IsDir() || filepath.Ext(e.Name()) != ".png" {
 			continue
@@ -253,11 +263,33 @@ func loadBackgrounds() ([]image.Image, error) {
 			return nil, err
 		}
 		out = append(out, img)
+		names = append(names, strings.TrimSuffix(e.Name(), filepath.Ext(e.Name())))
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no backgrounds in %s", dir)
 	}
+	// Attach names via parallel slice stored on package for filterBackgrounds.
+	bgNames = names
 	return out, nil
+}
+
+var bgNames []string
+
+func filterBackgrounds(all []image.Image, want []string) []image.Image {
+	if len(all) == 0 || len(bgNames) != len(all) {
+		return all
+	}
+	allow := make(map[string]struct{}, len(want))
+	for _, w := range want {
+		allow[w] = struct{}{}
+	}
+	var out []image.Image
+	for i, name := range bgNames {
+		if _, ok := allow[name]; ok {
+			out = append(out, all[i])
+		}
+	}
+	return out
 }
 
 // synthGraphs builds one classic jigsaw silhouette. All drop slots reuse it;
@@ -278,8 +310,8 @@ func makeGraph(shape func(img *image.NRGBA)) *slide.GraphImage {
 			if a == 0 {
 				continue
 			}
-			shadow.SetNRGBA(x, y, color.NRGBA{R: 12, G: 14, B: 18, A: uint8(float64(a) * 95 / 255)})
-			overlay.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: uint8(float64(a) * 55 / 255)})
+			shadow.SetNRGBA(x, y, color.NRGBA{R: 12, G: 14, B: 18, A: uint8(float64(a) * 70 / 255)})
+			overlay.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: uint8(float64(a) * 40 / 255)})
 		}
 	}
 	return &slide.GraphImage{OverlayImage: overlay, ShadowImage: shadow, MaskImage: mask}

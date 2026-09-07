@@ -104,8 +104,9 @@ html, body {
 .card[data-kind="rotate"] .thumb {
   left: 50%;
   top: 50%;
-  width: 48%;
-  height: 48%;
+  /* width/height set from public.width / public.parent_width in app.js */
+  width: 70%;
+  height: 70%;
   transform: translate(-50%, -50%) rotate(0deg);
   transform-origin: center center;
   border-radius: 50%;

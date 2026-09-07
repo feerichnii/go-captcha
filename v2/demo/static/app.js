@@ -61,6 +61,14 @@ function renderChallenge(card, ch) {
   if (kind === "rotate") {
     const thumb = $(".thumb", card);
     thumb.src = dataURL(ch.thumb || ch.tile);
+    // Thumb must match server geometry: width/parent_width (not a fixed %).
+    // Wrong size makes the inner disc look zoomed vs the outer ring.
+    const pub = ch.public || {};
+    const parent = pub.parent_width || pub.parentWidth || 220;
+    const tw = pub.width || 150;
+    const ratio = Math.max(0.4, Math.min(0.95, tw / parent));
+    thumb.style.width = `${ratio * 100}%`;
+    thumb.style.height = `${ratio * 100}%`;
     thumb.style.transform = "translate(-50%, -50%) rotate(0deg)";
     const track = $(".track", card);
     track.value = 0;

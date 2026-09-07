@@ -113,7 +113,9 @@ func (d *drawImage) DrawWithNRGBA(params *DrawImageParams) (img image.Image, bgI
 		bgImage := params.Background
 		b := bgImage.Bounds()
 		m := canvas.CreateNRGBACanvas(b.Dx(), b.Dy(), true)
-		point := randgen.RangCutImagePos(params.Width, params.Height, bgImage)
+		// Prefer textured crops so drop slots land on readable landmarks,
+		// not flat sky/water where the tile and notches look identical.
+		point := randgen.RangCutImagePosTextured(params.Width, params.Height, bgImage, 16)
 		draw.Draw(m.Get(), b, bgImage, point, draw.Src)
 		m.SubImage(image.Rect(0, 0, params.Width, params.Height))
 
