@@ -10,6 +10,29 @@ import (
 	"github.com/feerichnii/go-captcha/v2/base/option"
 )
 
+// TileDistortConfig controls mild anti-template transforms on the public tile.
+// Transforms must break pixel-perfect crop matching without making the tile
+// hard for a human to recognize in 1–2 seconds.
+type TileDistortConfig struct {
+	// ScaleDelta is max |scale-1| (default 0.02 → ±2%).
+	ScaleDelta float64
+	// WarpPxMin / WarpPxMax are sinusoidal warp amplitudes in pixels (default 1–2).
+	WarpPxMin float64
+	WarpPxMax float64
+	// GammaMin / GammaMax (default 0.95–1.05).
+	GammaMin float64
+	GammaMax float64
+	// BrightnessDelta is max absolute RGB brightness shift (default 6).
+	BrightnessDelta int
+	// NoiseAmt is max per-channel noise amplitude (default 3 = low).
+	NoiseAmt int
+	// SoftBlurProb is chance [0,1] of a very weak blur (default 0.35).
+	SoftBlurProb float64
+	// SoftSharpenProb is chance [0,1] of a very weak sharpen (default 0.35).
+	// Blur and sharpen are mutually exclusive; if both roll, neither applies.
+	SoftSharpenProb float64
+}
+
 // Options .
 type Options struct {
 	imageSize  *option.Size
@@ -19,6 +42,14 @@ type Options struct {
 	rangeGraphAnglePos        []*option.RangeVal
 	genGraphNumber            int
 	enableGraphVerticalRandom bool
+
+	// candidateSlotsMin/Max used when genGraphNumber < 1 (auto). Defaults 4–5.
+	candidateSlotsMin int
+	candidateSlotsMax int
+	// minSlotSepPx is minimum center-to-center distance between slots (0 = derive).
+	minSlotSepPx int
+
+	tileDistort TileDistortConfig
 }
 
 // GetImageSize .
@@ -54,9 +85,24 @@ func (o *Options) GetRangeGraphSize() *option.RangeVal {
 	}
 }
 
-// GetGenGraphNumber returns the configured slot count (0 = auto random 4–7).
+// GetGenGraphNumber returns the configured slot count (0 = auto random in CandidateSlots range).
 func (o *Options) GetGenGraphNumber() int {
 	return o.genGraphNumber
+}
+
+// GetCandidateSlotsMin returns the auto slot-count lower bound.
+func (o *Options) GetCandidateSlotsMin() int {
+	return o.candidateSlotsMin
+}
+
+// GetCandidateSlotsMax returns the auto slot-count upper bound.
+func (o *Options) GetCandidateSlotsMax() int {
+	return o.candidateSlotsMax
+}
+
+// GetTileDistort returns a copy of the mild tile-transform config.
+func (o *Options) GetTileDistort() TileDistortConfig {
+	return o.tileDistort
 }
 
 type Option func(*Options)
@@ -108,7 +154,7 @@ func WithRangeGraphAnglePos(vals []option.RangeVal) Option {
 }
 
 // WithGenGraphNumber sets how many drop slots (notches) are drawn on the master
-// image. Values < 1 mean auto (random 4–7). Default is auto.
+// image. Values < 1 mean auto (random CandidateSlotsMin–Max). Default is auto.
 // Only the secret target from GetData() is valid; decoy coordinates are never
 // exposed via GetPublicData().
 func WithGenGraphNumber(val int) Option {
@@ -120,8 +166,41 @@ func WithGenGraphNumber(val int) Option {
 	}
 }
 
-// WithEnableGraphVerticalRandom allows each drop slot to pick its own Y.
-// Default false: all notches share one Y so a horizontal slider can solve it.
+// WithCandidateSlots sets the auto random slot-count range (inclusive).
+// Invalid ranges are clamped to at least 1.
+func WithCandidateSlots(min, max int) Option {
+	return func(opts *Options) {
+		if min < 1 {
+			min = 1
+		}
+		if max < min {
+			max = min
+		}
+		opts.candidateSlotsMin = min
+		opts.candidateSlotsMax = max
+	}
+}
+
+// WithMinSlotSeparation sets minimum center distance between slots in pixels.
+// 0 keeps the derived default (~0.85×tile size, at least 40px).
+func WithMinSlotSeparation(px int) Option {
+	return func(opts *Options) {
+		if px < 0 {
+			px = 0
+		}
+		opts.minSlotSepPx = px
+	}
+}
+
+// WithTileDistort overrides mild anti-template tile transforms.
+func WithTileDistort(cfg TileDistortConfig) Option {
+	return func(opts *Options) {
+		opts.tileDistort = cfg
+	}
+}
+
+// WithEnableGraphVerticalRandom widens vertical scatter of drop slots.
+// Natural 2D placement is always on; this expands the usable Y band.
 func WithEnableGraphVerticalRandom(val bool) Option {
 	return func(opts *Options) {
 		opts.enableGraphVerticalRandom = val

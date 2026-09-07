@@ -16,6 +16,22 @@ func solid(w, h int, c color.NRGBA) *image.NRGBA {
 	return img
 }
 
+// texturedBG has spatial variety so slot placement / features are meaningful.
+func texturedBG(w, h int) *image.NRGBA {
+	img := image.NewNRGBA(image.Rect(0, 0, w, h))
+	for y := 0; y < h; y++ {
+		for x := 0; x < w; x++ {
+			img.SetNRGBA(x, y, color.NRGBA{
+				R: uint8(40 + (x*3+y*5)%180),
+				G: uint8(60 + (x*7+y*2)%160),
+				B: uint8(80 + (x*2+y*11)%140),
+				A: 255,
+			})
+		}
+	}
+	return img
+}
+
 func shapeGraph(r, g, b, a uint8) *GraphImage {
 	c := color.NRGBA{R: r, G: g, B: b, A: a}
 	img := solid(64, 64, c)
@@ -24,9 +40,8 @@ func shapeGraph(r, g, b, a uint8) *GraphImage {
 
 func testSlideCaptcha(t *testing.T, graphs []*GraphImage) Captcha {
 	t.Helper()
-	bg := solid(300, 220, color.NRGBA{R: 200, G: 200, B: 200, A: 255})
 	builder := NewBuilder()
-	builder.SetResources(WithGraphImages(graphs), WithBackgrounds([]image.Image{bg}))
+	builder.SetResources(WithGraphImages(graphs), WithBackgrounds([]image.Image{texturedBG(300, 220)}))
 	return builder.Make()
 }
 
@@ -34,7 +49,10 @@ func TestDefaultAutoSlotCount(t *testing.T) {
 	opts := NewOptions()
 	defaultOptions()(opts)
 	if opts.GetGenGraphNumber() != 0 {
-		t.Fatalf("default slots want 0 (auto 4–7), got %d", opts.GetGenGraphNumber())
+		t.Fatalf("default slots want 0 (auto), got %d", opts.GetGenGraphNumber())
+	}
+	if opts.GetCandidateSlotsMin() != 4 || opts.GetCandidateSlotsMax() != 5 {
+		t.Fatalf("auto range want 4–5, got %d–%d", opts.GetCandidateSlotsMin(), opts.GetCandidateSlotsMax())
 	}
 }
 
@@ -56,15 +74,12 @@ func TestGenerateThreeSlotsOneCorrect(t *testing.T) {
 	if secret.X == 0 && secret.Y == 0 {
 		t.Fatal("expected non-zero target")
 	}
-	// Public must not mirror secret target as tile start in a leaky way that
-	// equals the answer for ModeBasic — DX is tile start, X is target.
 	if pub.Width != secret.Width || pub.Height != secret.Height {
 		t.Fatalf("size mismatch pub=%+v secret=%+v", pub, secret)
 	}
 	if data.GetMasterImage() == nil || data.GetTileImage() == nil {
 		t.Fatal("missing images")
 	}
-	// Correct submit passes; far-away decoy position fails.
 	if !Validate(secret.X, secret.Y, secret.X, secret.Y, 5) {
 		t.Fatal("correct position must validate")
 	}
@@ -88,7 +103,6 @@ func TestPickSlotGraphsIdenticalSilhouette(t *testing.T) {
 	if got[correctIdx] == nil {
 		t.Fatal("correct slot empty")
 	}
-	// All slots must share one silhouette so matching is by image content.
 	for i, g := range got {
 		if g != got[correctIdx] {
 			t.Fatalf("slot %d shape differs from correct slot", i)
@@ -117,19 +131,55 @@ func TestGenerateSlotCountInRange(t *testing.T) {
 			t.Fatal(err)
 		}
 		n := data.GetSlotCount()
-		if n < 4 || n > 7 {
-			t.Fatalf("slot count %d outside [4,7]", n)
+		if n < 4 || n > 5 {
+			t.Fatalf("slot count %d outside [4,5]", n)
 		}
 		seen[n] = true
 	}
 	if len(seen) < 2 {
-		t.Fatalf("expected some variety in auto slot counts, got %v", seen)
+		t.Fatalf("expected variety in auto slot counts, got %v", seen)
+	}
+}
+
+func TestSlotsNotFenceLine(t *testing.T) {
+	c := &captcha{opts: NewOptions(), resources: NewResources()}
+	defaultOptions()(c.opts)
+	bg := texturedBG(300, 220)
+	var multiY int
+	for i := 0; i < 30; i++ {
+		blocks, _ := c.genGraphBlocksScattered(bg, c.opts.imageSize, c.opts.rangeGraphSize, 5)
+		if len(blocks) < 3 {
+			t.Fatalf("too few blocks: %d", len(blocks))
+		}
+		ys := map[int]bool{}
+		for _, b := range blocks {
+			ys[b.Y] = true
+		}
+		if len(ys) > 1 {
+			multiY++
+		}
+		// Min separation
+		minSep := minSlotSeparation(c.opts, blocks[0].Width)
+		for i := 0; i < len(blocks); i++ {
+			for j := i + 1; j < len(blocks); j++ {
+				dx := blocks[i].X - blocks[j].X
+				dy := blocks[i].Y - blocks[j].Y
+				if dx*dx+dy*dy < (minSep*minSep)/4 {
+					// allow some relax cases but centers shouldn't coincide
+					if dx == 0 && dy == 0 {
+						t.Fatal("duplicate slot positions")
+					}
+				}
+			}
+		}
+	}
+	if multiY < 20 {
+		t.Fatalf("expected scattered Y (not fence); multiY=%d/30", multiY)
 	}
 }
 
 func TestTileNotExactCrop(t *testing.T) {
 	src := solid(64, 64, color.NRGBA{R: 40, G: 80, B: 120, A: 255})
-	// Checker so warp/noise has structure to change.
 	for y := 0; y < 64; y++ {
 		for x := 0; x < 64; x++ {
 			if (x/8+y/8)%2 == 0 {
@@ -143,6 +193,7 @@ func TestTileNotExactCrop(t *testing.T) {
 	}
 	ob := out.Bounds()
 	diff := 0
+	var sumAbs float64
 	for y := 0; y < 64; y++ {
 		for x := 0; x < 64; x++ {
 			a := src.NRGBAAt(x, y)
@@ -150,11 +201,24 @@ func TestTileNotExactCrop(t *testing.T) {
 			if a != b {
 				diff++
 			}
+			sumAbs += float64(abs8(int(a.R)-int(b.R)) + abs8(int(a.G)-int(b.G)) + abs8(int(a.B)-int(b.B)))
 		}
 	}
-	if diff < 100 {
-		t.Fatalf("expected distorted tile to differ substantially, changed=%d", diff)
+	if diff < 50 {
+		t.Fatalf("tile must not be pixel-perfect crop, changed=%d", diff)
 	}
+	meanAbs := sumAbs / float64(64*64*3)
+	// Mild transforms: average channel drift should stay small for humans.
+	if meanAbs > 35 {
+		t.Fatalf("distort too strong for UX (mean abs channel delta=%.1f)", meanAbs)
+	}
+}
+
+func abs8(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 func TestBasicTargetsReachableBySlider(t *testing.T) {
