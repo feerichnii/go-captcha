@@ -4,7 +4,7 @@ Browser companion for [`v2/antibot`](../). Single ES module, no dependencies.
 
 | Export | Purpose |
 |---|---|
-| `TrajectoryTracker` | records PointerEvent fields (`pointer_type`, `buttons`, `pressure`, `coalesced`, …) + down/move/up events; downsampled and capped |
+| `TrajectoryTracker` | PointerEvent fields + coalesced events; optional `pieceEl` requires press on the tile before drag |
 | `collectBrowserSignals` | webdriver / headless / hardware / plugins hints |
 | `solveJSChallenge` | `sha256(nonce + "|" + probeValue)` for `IssueResponse.js_challenge` |
 | `solvePoW(salt, difficulty)` | leading-zero-bits of `sha256(salt + ":" + nonce)`; Web Workers with inline fallback |
@@ -26,10 +26,11 @@ const ab = new AntiBotClient({
 });
 
 const ch = await ab.issue({ kind: "slide" });
-// render ch.master / ch.tile; server Set-Cookie: gocaptcha_sid (HttpOnly)
+// render ch.master / ch.tile; place tileEl at ch.public.dx / ch.public.dy
 
-const tracker = new TrajectoryTracker(sliderEl).start();
-sliderEl.addEventListener("pointerup", async () => {
+// pieceEl = movable tile (checkbox-analog: user must press it before drag)
+const tracker = new TrajectoryTracker(trackEl, { pieceEl: tileEl }).start();
+tileEl.addEventListener("pointerup", async () => {
   tracker.stop();
   const res = await ab.verify(ch, { x: tileX, y: tileY }, tracker.snapshot());
   if (res.ok) { /* proceed */ } else { /* show generic error, re-issue */ }
@@ -37,7 +38,7 @@ sliderEl.addEventListener("pointerup", async () => {
 </script>
 ```
 
-The server handlers this expects are in [`example_http_test.go`](../example_http_test.go) (`EnsureSessionCookie` — never `RemoteAddr` as ClientKey).
+The server handlers this expects are in [`example_http_test.go`](../example_http_test.go) (`EnsureSessionCookie` + `AssertBrowserHeaders`).
 
 ## Wire contract
 
@@ -52,7 +53,8 @@ Verify body:
       "x": 1.5, "y": 2, "t": 1725460000000,
       "pointer_type": "mouse", "buttons": 1, "pressure": 0.5, "coalesced": 2
     }],
-    "events": ["pointerdown", "pointermove", "pointerup"]
+    "events": ["pointerdown", "pointermove", "pointerup"],
+    "piece_down": { "x": 12, "y": 18, "t": 1725460000000 }
   },
   "pow_nonce": "48213",
   "browser": {
@@ -63,10 +65,10 @@ Verify body:
 }
 ```
 
-- `answer` is `antibot.SlideSubmit` / `ClickSubmit` / `RotateSubmit`
-- `t` is epoch ms; must be monotonic; total duration must fit inside server-observed elapsed time
+- `piece_down` coords are **relative to the tile/knob element**; required for slide/rotate by default
 - `events` should include down → move → up order
-- `pow_nonce` ≤ 64 chars when `pow` was present on issue (including probe PoW)
+- `js_challenge_response` is required by default (anti-curl)
+- `pow_nonce` ≤ 64 chars when `pow` was present on issue
 
 ## PoW cost
 

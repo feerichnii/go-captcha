@@ -76,11 +76,13 @@ func TestRedisStoreGetDel(t *testing.T) {
 func TestRedisLayerEndToEnd(t *testing.T) {
 	s := redisStore(t)
 	l, err := New(s, Config{
-		SecretKey:     testKey,
-		MinSolveTime:  time.Millisecond,
-		PoWProbeProb:  -1,
-		PoWJitterBits: -1,
-		KeyPrefix:     "gocaptcha:test:" + time.Now().Format("150405.000") + ":",
+		SecretKey:              testKey,
+		MinSolveTime:           time.Millisecond,
+		PoWProbeProb:           -1,
+		PoWJitterBits:          -1,
+		AllowNonBrowser:        true,
+		AllowMissingPiecePress: true,
+		KeyPrefix:              "gocaptcha:test:" + time.Now().Format("150405.000") + ":",
 	})
 	if err != nil {
 		t.Fatal(err)

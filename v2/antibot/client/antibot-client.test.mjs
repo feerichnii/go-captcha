@@ -118,3 +118,40 @@ test("TrajectoryTracker records pointer meta when present", () => {
   assert.equal(p.buttons, 1);
   assert.equal(p.coalesced, 2);
 });
+
+test("TrajectoryTracker pieceEl requires press before drag", () => {
+  const trackListeners = {};
+  const pieceListeners = {};
+  const track = {
+    addEventListener: (n, fn) => (trackListeners[n] = fn),
+    removeEventListener: (n) => delete trackListeners[n],
+    getBoundingClientRect: () => ({ left: 0, top: 0 }),
+  };
+  const piece = {
+    addEventListener: (n, fn) => (pieceListeners[n] = fn),
+    removeEventListener: (n) => delete pieceListeners[n],
+    getBoundingClientRect: () => ({ left: 50, top: 40 }),
+  };
+  const tr = new TrajectoryTracker(track, { pieceEl: piece, minIntervalMs: 0 }).start();
+  // Move before arming must be ignored.
+  trackListeners.mousemove({ type: "mousemove", clientX: 60, clientY: 50 });
+  assert.equal(tr.snapshot().points.length, 0);
+  assert.equal(tr.snapshot().piece_down, undefined);
+
+  pieceListeners.mousedown({
+    type: "mousedown",
+    clientX: 60,
+    clientY: 50,
+    pointerType: "mouse",
+    buttons: 1,
+    pressure: 0.5,
+  });
+  trackListeners.mousemove({ type: "mousemove", clientX: 80, clientY: 50 });
+  trackListeners.mouseup({ type: "mouseup", clientX: 90, clientY: 50 });
+  tr.stop();
+  const snap = tr.snapshot();
+  assert.ok(snap.piece_down);
+  assert.deepEqual({ x: snap.piece_down.x, y: snap.piece_down.y }, { x: 10, y: 10 });
+  assert.ok(snap.points.length >= 2);
+  assert.ok(snap.events.includes("mousedown"));
+});

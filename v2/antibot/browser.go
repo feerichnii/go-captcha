@@ -6,12 +6,14 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 )
 
-// BrowserSignals are client-reported environment hints. All fields are
-// untrusted: use them only as risk inputs, never as sole reject criteria.
+// BrowserSignals are client-reported environment hints. Fields are untrusted:
+// use them as risk inputs; hard gates (JS challenge / non-browser UA) are
+// enforced separately when Config.RequireBrowser() is true.
 type BrowserSignals struct {
 	// WebDriver is navigator.webdriver.
 	WebDriver bool `json:"webdriver,omitempty"`
@@ -138,6 +140,54 @@ func FormatUAHint(ua string) []string {
 		}
 	}
 	return out
+}
+
+// nonBrowserUATokens are substrings that mark scripted HTTP clients.
+var nonBrowserUATokens = []string{
+	"curl/", "wget/", "python-requests", "python-urllib", "httpie", "scrapy",
+	"go-http-client", "java/", "apache-httpclient", "libwww-perl", "php/",
+	"node-fetch", "axios/", "okhttp", "postmanruntime", "insomnia/",
+}
+
+// LooksLikeNonBrowserUA reports User-Agents typical of curl/scripts (not browsers).
+func LooksLikeNonBrowserUA(ua string) bool {
+	ua = strings.TrimSpace(strings.ToLower(ua))
+	if ua == "" {
+		return false // unknown — handled elsewhere when RequireBrowser
+	}
+	for _, t := range nonBrowserUATokens {
+		if strings.Contains(ua, t) {
+			return true
+		}
+	}
+	return false
+}
+
+// AssertBrowserHeaders rejects obvious non-browser HTTP requests.
+// Call from HTTP handlers before Issue/Verify when RequireBrowser is on.
+// Empty Sec-Fetch-* is allowed (older browsers / some privacy modes) but
+// non-browser UAs and clearly wrong Sec-Fetch-Mode values are rejected.
+func AssertBrowserHeaders(r *http.Request) error {
+	if r == nil {
+		return ErrBrowserRequired
+	}
+	ua := r.Header.Get("User-Agent")
+	if LooksLikeNonBrowserUA(ua) {
+		return ErrBrowserRequired
+	}
+	if mode := strings.ToLower(r.Header.Get("Sec-Fetch-Mode")); mode != "" {
+		switch mode {
+		case "cors", "same-origin", "navigate", "no-cors", "websocket":
+			// ok
+		default:
+			return ErrBrowserRequired
+		}
+	}
+	accept := r.Header.Get("Accept")
+	if accept != "" && !strings.Contains(accept, "json") && !strings.Contains(accept, "*/*") && !strings.Contains(accept, "html") {
+		return ErrBrowserRequired
+	}
+	return nil
 }
 
 // SummarizeSignals is a short debug string for telemetry.

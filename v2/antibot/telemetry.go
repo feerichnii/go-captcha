@@ -81,6 +81,12 @@ func outcomeName(err error) string {
 		return "too_fast"
 	case ErrInvalidRequest:
 		return "invalid_request"
+	case ErrJSChallengeFailed:
+		return "js_challenge_failed"
+	case ErrBrowserRequired:
+		return "browser_required"
+	case ErrPiecePressRequired:
+		return "piece_press_required"
 	default:
 		return "internal"
 	}

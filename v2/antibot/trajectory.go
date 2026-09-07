@@ -30,6 +30,17 @@ type Point struct {
 type Trajectory struct {
 	Points []Point  `json:"points"`
 	Events []string `json:"events,omitempty"` // pointerdown, pointermove, pointerup, ...
+	// PieceDown is the checkbox-analog press on the movable tile/knob before drag.
+	// Required for slide/rotate when Config.RequirePiecePress() is true.
+	PieceDown *PieceDown `json:"piece_down,omitempty"`
+}
+
+// PieceDown records the initial press on the puzzle piece (tile / rotate knob).
+// Coordinates are relative to the piece element (0,0 = top-left of the tile).
+type PieceDown struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	T int64   `json:"t"` // epoch ms
 }
 
 // DurationMs returns the client-claimed interaction time.
@@ -135,6 +146,43 @@ func hasEventOrder(events []string) bool {
 		}
 	}
 	return seenDown && seenMove && seenUp && upAfterDown
+}
+
+// ValidatePieceDown checks the checkbox-analog press on the puzzle piece.
+// tileW/tileH are the public tile size (0 skips bounds). dwellMs is the
+// minimum gap from piece_down.T to the first later move point (0 disables).
+func ValidatePieceDown(tr Trajectory, tileW, tileH int, dwellMs int64) error {
+	pd := tr.PieceDown
+	if pd == nil {
+		return ErrPiecePressRequired
+	}
+	if pd.T <= 0 {
+		return ErrPiecePressRequired
+	}
+	if tileW > 0 && tileH > 0 {
+		if pd.X < 0 || pd.Y < 0 || pd.X > float64(tileW) || pd.Y > float64(tileH) {
+			return ErrPiecePressRequired
+		}
+	}
+	// Press must precede (or equal) the first recorded point, and dwell before motion.
+	var firstMoveT int64
+	for _, p := range tr.Points {
+		if p.T > pd.T {
+			firstMoveT = p.T
+			break
+		}
+	}
+	if len(tr.Points) > 0 && tr.Points[0].T+50 < pd.T {
+		// piece_down significantly after trajectory started — fabricated / reorder
+		return ErrPiecePressRequired
+	}
+	if dwellMs > 0 && firstMoveT > 0 && firstMoveT-pd.T < dwellMs {
+		return ErrPiecePressRequired
+	}
+	if !hasEventOrder(tr.Events) {
+		return ErrPiecePressRequired
+	}
+	return nil
 }
 
 // FinalPointNear reports whether the last trajectory point is within pad px of (x,y).

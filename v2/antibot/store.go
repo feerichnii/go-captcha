@@ -35,6 +35,9 @@ type ChallengeRecord struct {
 	// JS challenge minted at Issue; verified on Verify.
 	JSNonce string `json:"js_nonce,omitempty"`
 	JSProbe string `json:"js_probe,omitempty"`
+	// TileW/TileH are the public tile/knob size (slide/rotate) for piece_down bounds.
+	TileW int `json:"tile_w,omitempty"`
+	TileH int `json:"tile_h,omitempty"`
 }
 
 func encodeRecord(r *ChallengeRecord) ([]byte, error) {

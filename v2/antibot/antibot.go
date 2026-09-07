@@ -151,6 +151,9 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	if err := l.CheckIssueRate(ctx, req.ClientKey); err != nil {
 		return nil, err
 	}
+	if l.cfg.RequireBrowser() && LooksLikeNonBrowserUA(req.Signals.UserAgent) {
+		return nil, ErrBrowserRequired
+	}
 
 	hash := hashClient(req.ClientKey)
 	l.noteIssued(ctx, hash)
@@ -189,6 +192,7 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	}
 
 	now := l.now()
+	tileW, tileH := tileSizeFromAnswer(req.Kind, req.Answer)
 	rec := &ChallengeRecord{
 		ID:          id,
 		Kind:        req.Kind,
@@ -198,6 +202,8 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		ExpiresAtMs: now.Add(l.cfg.TTL).UnixMilli(),
 		JSNonce:     jsCh.Nonce,
 		JSProbe:     jsCh.Probe,
+		TileW:       tileW,
+		TileH:       tileH,
 	}
 
 	diff := l.cfg.choosePoW(level)
@@ -261,6 +267,9 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	if err := l.CheckVerifyRate(ctx, req.ClientKey); err != nil {
 		return nil, err
 	}
+	if l.cfg.RequireBrowser() && LooksLikeNonBrowserUA(req.Signals.UserAgent) {
+		return nil, ErrBrowserRequired
+	}
 
 	hash := hashClient(req.ClientKey)
 	ev := VerifyEvent{ChallengeID: req.ID, ClientHash: hash, TrajectoryPoints: len(req.Trajectory.Points)}
@@ -320,20 +329,35 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		return fail(ErrPoWInvalid)
 	}
 
-	// 5. JS / DOM challenge (when minted at issue).
-	// Missing response is soft (legacy clients); a wrong response raises risk.
+	// 5. JS / DOM challenge (hard when RequireBrowser; otherwise soft risk).
 	jsOK := true
 	var extraBrowserReasons []string
 	if rec.JSNonce != "" {
 		if req.Browser.JSChallengeResponse == "" {
+			if l.cfg.RequireBrowser() {
+				l.recordFail(ctx, hash)
+				return fail(ErrJSChallengeFailed)
+			}
 			extraBrowserReasons = append(extraBrowserReasons, "js_challenge_skipped")
 		} else {
 			candidates := ProbeCandidates(req.Browser, rec.JSProbe)
 			jsOK = CheckJSChallenge(JSChallenge{Nonce: rec.JSNonce, Probe: rec.JSProbe}, req.Browser.JSChallengeResponse, candidates...)
+			if !jsOK && l.cfg.RequireBrowser() {
+				l.recordFail(ctx, hash)
+				return fail(ErrJSChallengeFailed)
+			}
 		}
 	}
 	bDelta, bReasons := BrowserRisk(req.Browser, jsOK)
 	bReasons = append(bReasons, extraBrowserReasons...)
+
+	// 5b. Piece press (checkbox analog) for slide/rotate.
+	if l.cfg.RequirePiecePress() && (rec.Kind == KindSlide || rec.Kind == KindRotate) {
+		if err := ValidatePieceDown(req.Trajectory, rec.TileW, rec.TileH, l.cfg.MinPiecePressDwellMs); err != nil {
+			l.recordFail(ctx, hash)
+			return fail(err)
+		}
+	}
 
 	// 6. Trajectory structure + behavior score.
 	issues := ValidateTrajectory(req.Trajectory, l.cfg.MaxJumpPx)
@@ -400,4 +424,19 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		RiskLevel:      dec.LevelAfter,
 		RequirePoWNext: l.cfg.powDifficultyFor(dec.LevelAfter) > 0,
 	}, nil
+}
+
+// tileSizeFromAnswer extracts public tile/knob dimensions from the sealed answer JSON.
+func tileSizeFromAnswer(kind string, answer json.RawMessage) (w, h int) {
+	switch kind {
+	case KindSlide, KindRotate:
+		var block struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		}
+		if json.Unmarshal(answer, &block) == nil {
+			return block.Width, block.Height
+		}
+	}
+	return 0, 0
 }
