@@ -10,4 +10,4 @@ go run .
 
 Optional: `PORT=9000 go run .`
 
-Backgrounds are loaded from `../resources/backgrounds/bg_*.png`. Slide/drag use three synthesized tile graphs; only one slot matches the piece.
+Backgrounds are loaded from `../resources/backgrounds/bg_*.png`. Slide/drag use one jigsaw silhouette on three identical notches; only image alignment picks the correct slot.

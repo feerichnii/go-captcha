@@ -29,7 +29,7 @@ If you need a stateless token instead of a store, `challenge.Seal`/`Open` produc
 ## Generation hardening
 
 - Answer geometry, characters and ordering use `crypto/rand` (`random.RandInt` / `Perm`, buffered, unbiased).
-- Slide: **3 drop slots by default** — one correct notch matching the tile, two decoys preferably with different shapes when multiple `GraphImage`s are provided; alpha jitter on tile edges. Only `GetData().X/Y` is the answer; slot coordinates are not in `GetPublicData()`.
+- Slide: **3 drop slots by default** — identical silhouette at every notch; humans match by aligning the tile image to the correct background crop. Only `GetData().X/Y` is the answer; slot coordinates are not in `GetPublicData()`.
 - Rotate: independent luminance noise fields on master and thumb (they do not align under any rotation, so plain correlation solvers need to average it out).
 - JPEG defaults use quality 85 instead of 100.
 

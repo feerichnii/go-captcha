@@ -22,8 +22,8 @@ func defaultOptions() Option {
 			DeadZoneDirectionTypeTop,
 		}
 
-		// Three drop slots: one correct notch matching the tile, two decoys
-		// (prefer different shapes when multiple GraphImages are configured).
+		// Three drop slots: identical silhouette at different positions;
+		// only one position matches the tile's background crop.
 		opts.genGraphNumber = 3
 		opts.rangeGraphAnglePos = []*option.RangeVal{
 			{Min: -8, Max: 8},

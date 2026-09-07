@@ -28,9 +28,9 @@
 This edition focuses on making the CAPTCHA hard for automated solvers without changing the ergonomics of the original API. Three things ship on top of upstream GoCaptcha:
 
 - **Safer-by-default answers** — `GetPublicData()` returns everything the browser needs and nothing it shouldn't. The real answer (`GetData()`) never has to leave the server, and can be encrypted at rest (AES-256-GCM) by the `antibot` layer or sealed into an opaque AEAD token via [`v2/base/challenge`](v2/base/challenge).
-- **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get decoy shadows and edge jitter, and rotate masters get rim noise. See [SECURITY.md](SECURITY.md).
+- **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get multiple identical-silhouette decoy slots, and rotate masters get rim noise. See [SECURITY.md](SECURITY.md).
 - **The `antibot` layer** — a drop-in orchestration package ([`v2/antibot`](v2/antibot)) that manages the challenge lifecycle (crypto ID, TTL, single-use, attempt caps), scores pointer trajectories, rate-limits per client, and issues adaptive proof-of-work to suspicious clients. Backed by in-memory or Redis storage.
-- **Bundled high-complexity backgrounds** — a fresh set of dense, high-entropy background images ships under [`v2/resources/backgrounds`](v2/resources/backgrounds), so masters are harder to segment for OCR/contour-based solvers out of the box.
+- **Bundled readable backgrounds** — landmark-rich scenes under [`v2/resources/backgrounds`](v2/resources/backgrounds) so humans can align the slide tile by eye while bots still face multiple identical notches.
 
 | Capability            | Upstream | AntiBot Edition |
 |-----------------------|:--------:|:---------------:|
@@ -261,7 +261,7 @@ func loadPng(p string) (image.Image, error) {
 | slide.WithImageAlpha(float32)                                  | Set main image transparency                    |
 | slide.WithRangeGraphSize(val option.RangeVal)                  | Set range for random graphic size              |
 | slide.WithRangeGraphAnglePos([]option.RangeVal)                | Set range for random graphic angles            |
-| slide.WithGenGraphNumber(val int)                              | Number of drop slots on the master (default **3**: 1 correct + decoys). Prefer ≥2 distinct `GraphImage`s so decoy notches differ from the tile. |
+| slide.WithGenGraphNumber(val int)                              | Number of drop slots on the master (default **3**: identical silhouette, 1 correct position). |
 | slide.WithEnableGraphVerticalRandom(val bool)                  | Enable/disable random vertical graphic sorting |
 | slide.WithRangeDeadZoneDirections(val []DeadZoneDirectionType) | Set dead zone directions for puzzle pieces     |
 

@@ -73,7 +73,7 @@ func TestGenerateThreeSlotsOneCorrect(t *testing.T) {
 	}
 }
 
-func TestPickSlotGraphsPreferDistinctDecoys(t *testing.T) {
+func TestPickSlotGraphsIdenticalSilhouette(t *testing.T) {
 	c := &captcha{resources: NewResources()}
 	g0 := shapeGraph(1, 0, 0, 255)
 	g1 := shapeGraph(0, 1, 0, 255)
@@ -88,18 +88,11 @@ func TestPickSlotGraphsPreferDistinctDecoys(t *testing.T) {
 	if got[correctIdx] == nil {
 		t.Fatal("correct slot empty")
 	}
-	// Decoys should not all be the correct graph when pool has alternatives.
-	sameAsCorrect := 0
+	// All slots must share one silhouette so matching is by image content.
 	for i, g := range got {
-		if i == correctIdx {
-			continue
+		if g != got[correctIdx] {
+			t.Fatalf("slot %d shape differs from correct slot", i)
 		}
-		if g == got[correctIdx] {
-			sameAsCorrect++
-		}
-	}
-	if sameAsCorrect == 2 {
-		t.Fatal("expected at least one decoy with a different graph shape")
 	}
 }
 

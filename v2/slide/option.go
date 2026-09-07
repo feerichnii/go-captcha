@@ -123,8 +123,9 @@ func WithRangeGraphAnglePos(vals []option.RangeVal) Option {
 }
 
 // WithGenGraphNumber sets how many drop slots (notches) are drawn on the master
-// image. Default is 3: one correct + decoys. Only the secret target from
-// GetData() is valid; decoy coordinates are never exposed via GetPublicData().
+// image. Default is 3: identical silhouette at each notch, one correct position.
+// Only the secret target from GetData() is valid; decoy coordinates are never
+// exposed via GetPublicData().
 func WithGenGraphNumber(val int) Option {
 	return func(opts *Options) {
 		if val < 1 {

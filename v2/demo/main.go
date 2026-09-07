@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"image"
 	"image/color"
-	"image/draw"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -15,6 +15,7 @@ import (
 
 	"github.com/feerichnii/go-captcha/v2/antibot"
 	"github.com/feerichnii/go-captcha/v2/base/codec"
+	"github.com/feerichnii/go-captcha/v2/base/option"
 	"github.com/feerichnii/go-captcha/v2/rotate"
 	"github.com/feerichnii/go-captcha/v2/slide"
 )
@@ -44,11 +45,15 @@ func main() {
 	}
 	graphs := synthGraphs()
 
-	slideBasic := slide.NewBuilder()
+	slideBasic := slide.NewBuilder(
+		slide.WithRangeGraphSize(option.RangeVal{Min: 64, Max: 70}),
+	)
 	slideBasic.SetResources(slide.WithBackgrounds(bgs), slide.WithGraphImages(graphs))
 	slideCapt := slideBasic.Make()
 
-	slideDrag := slide.NewBuilder()
+	slideDrag := slide.NewBuilder(
+		slide.WithRangeGraphSize(option.RangeVal{Min: 64, Max: 70}),
+	)
 	slideDrag.SetResources(slide.WithBackgrounds(bgs), slide.WithGraphImages(graphs))
 	dragCapt := slideDrag.MakeWithRegion()
 
@@ -255,13 +260,10 @@ func loadBackgrounds() ([]image.Image, error) {
 	return out, nil
 }
 
-// synthGraphs builds a few distinct tile shapes so the 3-slot decoys look different.
+// synthGraphs builds one classic jigsaw silhouette. All drop slots reuse it;
+// only background alignment distinguishes the correct notch.
 func synthGraphs() []*slide.GraphImage {
-	return []*slide.GraphImage{
-		makeGraph(blobA),
-		makeGraph(blobB),
-		makeGraph(blobC),
-	}
+	return []*slide.GraphImage{makeGraph(jigsawPiece)}
 }
 
 func makeGraph(shape func(img *image.NRGBA)) *slide.GraphImage {
@@ -270,84 +272,115 @@ func makeGraph(shape func(img *image.NRGBA)) *slide.GraphImage {
 	shadow := image.NewNRGBA(image.Rect(0, 0, s, s))
 	overlay := image.NewNRGBA(image.Rect(0, 0, s, s))
 	shape(mask)
-	draw.Draw(shadow, shadow.Bounds(), &image.Uniform{C: color.NRGBA{A: 140}}, image.Point{}, draw.Src)
-	// Apply mask to shadow/overlay.
 	for y := 0; y < s; y++ {
 		for x := 0; x < s; x++ {
 			a := mask.NRGBAAt(x, y).A
 			if a == 0 {
-				shadow.SetNRGBA(x, y, color.NRGBA{})
-				overlay.SetNRGBA(x, y, color.NRGBA{})
-			} else {
-				shadow.SetNRGBA(x, y, color.NRGBA{R: 20, G: 20, B: 20, A: 160})
-				overlay.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: 90})
+				continue
 			}
+			shadow.SetNRGBA(x, y, color.NRGBA{R: 12, G: 14, B: 18, A: uint8(float64(a) * 95 / 255)})
+			overlay.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: uint8(float64(a) * 55 / 255)})
 		}
 	}
 	return &slide.GraphImage{OverlayImage: overlay, ShadowImage: shadow, MaskImage: mask}
 }
 
-func blobA(img *image.NRGBA) {
-	fillCircle(img, 35, 35, 28)
-	fillCircle(img, 18, 22, 12)
-	fillCircle(img, 52, 20, 11)
-	fillCircle(img, 50, 50, 12)
-}
+// jigsawPiece draws a smooth puzzle tile: rounded body, top tab, right socket.
+// Uses 4× supersampling so edges stay clean after BiLinear downscale.
+func jigsawPiece(img *image.NRGBA) {
+	const (
+		s      = 70
+		scale  = 4
+		hi     = s * scale
+		margin = 10.0 * scale
+		corner = 8.0 * scale
+		tabR   = 9.0 * scale
+		neckW  = 7.0 * scale
+	)
+	bodyL := margin
+	bodyT := margin + 8*scale
+	bodyR := float64(hi) - margin
+	bodyB := float64(hi) - margin
+	tabCX := (bodyL + bodyR) / 2
+	tabCY := bodyT - tabR*0.55
+	sockCX := bodyR + tabR*0.35
+	sockCY := (bodyT + bodyB) / 2
 
-func blobB(img *image.NRGBA) {
-	fillRect(img, 10, 10, 50, 50)
-	fillCircle(img, 35, 8, 10)
-	fillCircle(img, 8, 35, 10)
-	clearCircle(img, 35, 62, 10)
-	clearCircle(img, 62, 35, 10)
-}
-
-func blobC(img *image.NRGBA) {
-	fillCircle(img, 35, 35, 26)
-	fillRect(img, 30, 5, 10, 60)
-	fillRect(img, 5, 30, 60, 10)
-}
-
-func fillCircle(img *image.NRGBA, cx, cy, r int) {
-	r2 := r * r
-	b := img.Bounds()
-	for y := cy - r; y <= cy+r; y++ {
-		for x := cx - r; x <= cx+r; x++ {
-			if x < b.Min.X || y < b.Min.Y || x >= b.Max.X || y >= b.Max.Y {
-				continue
+	hiMask := image.NewNRGBA(image.Rect(0, 0, hi, hi))
+	for y := 0; y < hi; y++ {
+		for x := 0; x < hi; x++ {
+			fx, fy := float64(x)+0.5, float64(y)+0.5
+			dBody := sdRoundRect(fx, fy, bodyL, bodyT, bodyR, bodyB, corner)
+			dTab := sdCircle(fx, fy, tabCX, tabCY, tabR)
+			dNeck := sdRoundRect(fx, fy, tabCX-neckW/2, tabCY, tabCX+neckW/2, bodyT+2*scale, 2*scale)
+			dSock := sdCircle(fx, fy, sockCX, sockCY, tabR)
+			d := sdUnion(sdUnion(dBody, dTab), dNeck)
+			d = sdSubtract(d, dSock)
+			a := aaCover(d)
+			if a > 0 {
+				hiMask.SetNRGBA(x, y, color.NRGBA{A: a})
 			}
-			dx, dy := x-cx, y-cy
-			if dx*dx+dy*dy <= r2 {
-				img.SetNRGBA(x, y, color.NRGBA{A: 255})
+		}
+	}
+	// Box-filter downsample to the final mask size.
+	for y := 0; y < s; y++ {
+		for x := 0; x < s; x++ {
+			var sum int
+			for dy := 0; dy < scale; dy++ {
+				for dx := 0; dx < scale; dx++ {
+					sum += int(hiMask.NRGBAAt(x*scale+dx, y*scale+dy).A)
+				}
+			}
+			a := uint8(sum / (scale * scale))
+			if a > 0 {
+				img.SetNRGBA(x, y, color.NRGBA{A: a})
 			}
 		}
 	}
 }
-
-func clearCircle(img *image.NRGBA, cx, cy, r int) {
-	r2 := r * r
-	b := img.Bounds()
-	for y := cy - r; y <= cy+r; y++ {
-		for x := cx - r; x <= cx+r; x++ {
-			if x < b.Min.X || y < b.Min.Y || x >= b.Max.X || y >= b.Max.Y {
-				continue
-			}
-			dx, dy := x-cx, y-cy
-			if dx*dx+dy*dy <= r2 {
-				img.SetNRGBA(x, y, color.NRGBA{})
-			}
-		}
-	}
+func sdCircle(x, y, cx, cy, r float64) float64 {
+	dx, dy := x-cx, y-cy
+	return math.Sqrt(dx*dx+dy*dy) - r
 }
 
-func fillRect(img *image.NRGBA, x0, y0, w, h int) {
-	b := img.Bounds()
-	for y := y0; y < y0+h; y++ {
-		for x := x0; x < x0+w; x++ {
-			if x < b.Min.X || y < b.Min.Y || x >= b.Max.X || y >= b.Max.Y {
-				continue
-			}
-			img.SetNRGBA(x, y, color.NRGBA{A: 255})
-		}
+func sdRoundRect(x, y, left, top, right, bottom, radius float64) float64 {
+	cx := clamp(x, left+radius, right-radius)
+	cy := clamp(y, top+radius, bottom-radius)
+	dx, dy := x-cx, y-cy
+	return math.Sqrt(dx*dx+dy*dy) - radius
+}
+
+func sdUnion(a, b float64) float64 {
+	if a < b {
+		return a
 	}
+	return b
+}
+
+func sdSubtract(a, b float64) float64 {
+	nb := -b
+	if a > nb {
+		return a
+	}
+	return nb
+}
+
+func aaCover(dist float64) uint8 {
+	if dist <= -0.5 {
+		return 255
+	}
+	if dist >= 0.5 {
+		return 0
+	}
+	return uint8((0.5 - dist) * 255)
+}
+
+func clamp(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
