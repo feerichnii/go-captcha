@@ -80,12 +80,10 @@ func (c *captcha) sampleSlotCandidates(bg image.Image, leftMin, maxX, yLo, yHi, 
 		}
 		seen[key] = struct{}{}
 		f := analyzeRegion(bg, x, y, cW, cH)
-		// Prefer textured enough regions (avoid flat sky).
 		tex := randgen.TextureScore(bg, x, y, cW, cH)
 		out = append(out, slotCand{x: x, y: y, feat: f, tex: tex})
 	}
 
-	// Coarse grid with jitter — spreads across the usable area.
 	stepX := cW / 3
 	if stepX < 8 {
 		stepX = 8
@@ -103,6 +101,75 @@ func (c *captcha) sampleSlotCandidates(bg image.Image, leftMin, maxX, yLo, yHi, 
 	}
 	for i := 0; i < samples; i++ {
 		add(random.RandInt(leftMin, maxX), random.RandInt(yLo, yHi))
+	}
+	return out
+}
+
+// pickSharedSlotY chooses one horizontal row with good average texture for the slider.
+func (c *captcha) pickSharedSlotY(bg image.Image, leftMin, maxX, yLo, yHi, cW, cH int) int {
+	bestY := yLo
+	bestScore := -1.0
+	step := cH / 4
+	if step < 4 {
+		step = 4
+	}
+	for y := yLo; y <= yHi; y += step {
+		var sum float64
+		n := 0
+		for x := leftMin; x <= maxX; x += cW / 2 {
+			if x > maxX {
+				break
+			}
+			sum += randgen.TextureScore(bg, x, y, cW, cH)
+			n++
+		}
+		if n == 0 {
+			continue
+		}
+		avg := sum / float64(n)
+		if avg > bestScore {
+			bestScore = avg
+			bestY = y
+		}
+	}
+	// Small jitter so the row isn't always identical across challenges.
+	jitter := random.RandInt(-6, 6)
+	y := bestY + jitter
+	if y < yLo {
+		y = yLo
+	}
+	if y > yHi {
+		y = yHi
+	}
+	return y
+}
+
+// sampleSlotCandidatesOnRow samples X positions on a fixed Y (same line as the tile).
+func (c *captcha) sampleSlotCandidatesOnRow(bg image.Image, leftMin, maxX, y, cW, cH, samples int) []slotCand {
+	out := make([]slotCand, 0, samples+16)
+	seen := map[int]struct{}{}
+	add := func(x int) {
+		if x < leftMin || x > maxX {
+			return
+		}
+		if _, ok := seen[x]; ok {
+			return
+		}
+		seen[x] = struct{}{}
+		f := analyzeRegion(bg, x, y, cW, cH)
+		tex := randgen.TextureScore(bg, x, y, cW, cH)
+		out = append(out, slotCand{x: x, y: y, feat: f, tex: tex})
+	}
+
+	stepX := cW / 4
+	if stepX < 6 {
+		stepX = 6
+	}
+	for x := leftMin; x <= maxX; x += stepX {
+		add(x + random.RandInt(-stepX/4, stepX/4))
+	}
+	for i := 0; i < samples; i++ {
+		add(random.RandInt(leftMin, maxX))
 	}
 	return out
 }

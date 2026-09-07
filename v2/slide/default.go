@@ -15,8 +15,8 @@ func defaultOptions() Option {
 	return func(opts *Options) {
 		opts.imageSize = &option.Size{Width: 300, Height: 220}
 		opts.imageAlpha = 1
-		// Natural 2D scatter for decoys (not a fence line).
-		opts.enableGraphVerticalRandom = true
+		// Horizontal slider: all holes share one Y with the movable tile.
+		opts.enableGraphVerticalRandom = false
 
 		// Default: exactly 4 candidate holes (1 real + 3 decoy).
 		opts.genGraphNumber = 0

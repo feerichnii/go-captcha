@@ -260,8 +260,8 @@ func (c *captcha) randGraphAngle() int {
 }
 
 // genGraphBlocksScattered places one high-texture correct slot, then decoys with
-// similar variance/luminance/edge density and minimum separation — scattered in
-// 2D so slots do not form a fence. Index 0 is the tile-source before shuffle.
+// similar local features and minimum X separation. By default all holes share
+// one Y with the tile (horizontal slider). Index 0 is the real tile-source.
 func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size, size *option.RangeVal, length int) ([]*Block, *option.Point) {
 	width := imageSize.Width
 	height := imageSize.Height
@@ -284,29 +284,15 @@ func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size
 	if yHi < yLo {
 		yHi = yLo
 	}
-	// Keep drag simple: usable Y band is the full canvas (scattered), but when
-	// verticalRandom is off we still scatter within a moderate mid band so the
-	// layout is not a single fence line.
-	if !c.opts.enableGraphVerticalRandom {
-		band := (yHi - yLo) / 3
-		if band < 12 {
-			band = 12
-		}
-		mid := (yLo + yHi) / 2
-		yLo = mid - band
-		yHi = mid + band
-		if yLo < 5 {
-			yLo = 5
-		}
-		if yHi > height-cHeight-5 {
-			yHi = height - cHeight - 5
-		}
-		if yHi < yLo {
-			yHi = yLo
-		}
-	}
 
-	candidates := c.sampleSlotCandidates(bg, leftMin, maxX, yLo, yHi, cWidth, cHeight, 40)
+	var candidates []slotCand
+	if c.opts.enableGraphVerticalRandom {
+		candidates = c.sampleSlotCandidates(bg, leftMin, maxX, yLo, yHi, cWidth, cHeight, 40)
+	} else {
+		// One shared row: pick a textured Y, then sample X along that line.
+		rowY := c.pickSharedSlotY(bg, leftMin, maxX, yLo, yHi, cWidth, cHeight)
+		candidates = c.sampleSlotCandidatesOnRow(bg, leftMin, maxX, rowY, cWidth, cHeight, 48)
+	}
 	if len(candidates) == 0 {
 		candidates = []slotCand{{x: leftMin, y: yLo}}
 	}
@@ -318,6 +304,14 @@ func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size
 		}
 	}
 	correct := candidates[best]
+	// Force shared Y for slider mode (defensive).
+	sharedY := correct.y
+	if !c.opts.enableGraphVerticalRandom {
+		for i := range candidates {
+			candidates[i].y = sharedY
+		}
+	}
+
 	minSep := minSlotSeparation(c.opts, cWidth)
 
 	placed := make([]slotCand, 0, length)
@@ -327,6 +321,16 @@ func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size
 		for _, q := range set {
 			dx := p.x - q.x
 			dy := p.y - q.y
+			if !c.opts.enableGraphVerticalRandom {
+				// Same row: enforce horizontal gap only.
+				if dx < 0 {
+					dx = -dx
+				}
+				if dx < minSep {
+					return true
+				}
+				continue
+			}
 			if dx*dx+dy*dy < minSep*minSep {
 				return true
 			}
@@ -348,7 +352,6 @@ func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size
 			}
 		}
 		if bestI < 0 {
-			// Relax: pick farthest remaining candidate.
 			farthestI := -1
 			farthestD := -1.0
 			for i, p := range candidates {
@@ -386,8 +389,12 @@ func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size
 
 	blocks := make([]*Block, 0, len(placed))
 	for _, p := range placed {
+		y := p.y
+		if !c.opts.enableGraphVerticalRandom {
+			y = sharedY
+		}
 		blocks = append(blocks, &Block{
-			X: p.x, Y: p.y,
+			X: p.x, Y: y,
 			Width: cWidth, Height: cHeight,
 			Angle: randAngle,
 		})

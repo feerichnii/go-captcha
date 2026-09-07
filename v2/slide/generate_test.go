@@ -178,40 +178,32 @@ func TestExactRealHoleMatchesTileCrop(t *testing.T) {
 	}
 }
 
-func TestSlotsNotFenceLine(t *testing.T) {
+func TestSlotsShareSameYAsTile(t *testing.T) {
 	c := &captcha{opts: NewOptions(), resources: NewResources()}
 	defaultOptions()(c.opts)
 	bg := texturedBG(300, 220)
-	var multiY int
 	for i := 0; i < 30; i++ {
-		blocks, _ := c.genGraphBlocksScattered(bg, c.opts.imageSize, c.opts.rangeGraphSize, 5)
-		if len(blocks) < 3 {
+		blocks, tilePoint := c.genGraphBlocksScattered(bg, c.opts.imageSize, c.opts.rangeGraphSize, 4)
+		if len(blocks) < 2 {
 			t.Fatalf("too few blocks: %d", len(blocks))
 		}
-		ys := map[int]bool{}
-		for _, b := range blocks {
-			ys[b.Y] = true
+		y0 := blocks[0].Y
+		if tilePoint.Y != y0 {
+			t.Fatalf("tile start Y=%d != hole Y=%d", tilePoint.Y, y0)
 		}
-		if len(ys) > 1 {
-			multiY++
-		}
-		// Min separation
-		minSep := minSlotSeparation(c.opts, blocks[0].Width)
-		for i := 0; i < len(blocks); i++ {
-			for j := i + 1; j < len(blocks); j++ {
-				dx := blocks[i].X - blocks[j].X
-				dy := blocks[i].Y - blocks[j].Y
-				if dx*dx+dy*dy < (minSep*minSep)/4 {
-					// allow some relax cases but centers shouldn't coincide
-					if dx == 0 && dy == 0 {
-						t.Fatal("duplicate slot positions")
-					}
-				}
+		for j, b := range blocks {
+			if b.Y != y0 {
+				t.Fatalf("hole %d Y=%d want shared Y=%d", j, b.Y, y0)
 			}
 		}
-	}
-	if multiY < 20 {
-		t.Fatalf("expected scattered Y (not fence); multiY=%d/30", multiY)
+		// X positions must differ (not stacked).
+		xs := map[int]bool{}
+		for _, b := range blocks {
+			xs[b.X] = true
+		}
+		if len(xs) < 2 {
+			t.Fatal("expected distinct X positions on the shared row")
+		}
 	}
 }
 

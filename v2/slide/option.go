@@ -197,8 +197,8 @@ func WithTileDistort(cfg TileDistortConfig) Option {
 	}
 }
 
-// WithEnableGraphVerticalRandom widens vertical scatter of drop slots.
-// Natural 2D placement is always on; this expands the usable Y band.
+// WithEnableGraphVerticalRandom allows each drop slot its own Y.
+// Default false: all holes share one Y with the tile so a horizontal slider works.
 func WithEnableGraphVerticalRandom(val bool) Option {
 	return func(opts *Options) {
 		opts.enableGraphVerticalRandom = val
