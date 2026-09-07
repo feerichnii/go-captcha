@@ -244,23 +244,11 @@ async function verifyCard(card) {
   try {
     const tracker = card._tracker;
     tracker?.stop();
-<<<<<<< HEAD
     const raw = tracker?.snapshot() || { points: [], events: [] };
     const pub = ch.public || {};
     const tileW = pub.width || (kind === "rotate" ? 150 : 60);
     const tileH = pub.height || tileW;
     const snap = ensureTrajectory(raw, kind, tileW, tileH);
-=======
-    const snap = tracker?.snapshot() || { points: [], events: [] };
-    // Ensure down→move→up if slider produced points without full event set
-    if (snap.points?.length >= 2 && (!snap.events || snap.events.length < 3)) {
-      snap.events = ["pointerdown", "pointermove", "pointerup"];
-    }
-    if (!snap.piece_down && (kind === "slide" || kind === "rotate") && snap.points?.length) {
-      const p0 = snap.points[0];
-      snap.piece_down = { x: 10, y: 10, t: p0.t - 20 };
-    }
->>>>>>> 823a6d9 (refactor: remove Drag-Drop captcha mode)
 
     let answer;
     if (kind === "rotate") {
