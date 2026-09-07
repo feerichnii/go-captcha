@@ -9,13 +9,13 @@ import (
 	"golang.org/x/image/draw"
 )
 
-// DistortTile applies default mild post-crop transforms.
+// DistortTile applies default photometric anti-template transforms.
 func DistortTile(src image.Image) image.Image {
 	return DistortTileWith(src, defaultTileDistort())
 }
 
-// DistortTileWith applies configurable mild transforms so the public tile is
-// not a pixel-perfect crop, while remaining a clear visual hint for humans.
+// DistortTileWith applies configurable transforms. Defaults are photometric-only
+// (gamma / brightness / independent noise) so puzzle geometry stays exact.
 func DistortTileWith(src image.Image, cfg TileDistortConfig) image.Image {
 	if src == nil {
 		return nil
@@ -29,6 +29,7 @@ func DistortTileWith(src image.Image, cfg TileDistortConfig) image.Image {
 
 	out := cloneNRGBA(src)
 
+	// Optional geometric ops — off by default.
 	if cfg.ScaleDelta > 0 {
 		sx := 1.0 + randSignedFloat(cfg.ScaleDelta)
 		sy := 1.0 + randSignedFloat(cfg.ScaleDelta)
@@ -50,18 +51,23 @@ func DistortTileWith(src image.Image, cfg TileDistortConfig) image.Image {
 		out = warpNRGBA(out, amp, period)
 	}
 
-	gamma := cfg.GammaMin
-	if cfg.GammaMax > cfg.GammaMin {
-		gamma = cfg.GammaMin + randFloat()*(cfg.GammaMax-cfg.GammaMin)
+	gamma := 1.0
+	if cfg.GammaMin > 0 || cfg.GammaMax > 0 {
+		gamma = cfg.GammaMin
+		if cfg.GammaMax > cfg.GammaMin {
+			gamma = cfg.GammaMin + randFloat()*(cfg.GammaMax-cfg.GammaMin)
+		}
 	}
 	bright := 0
 	if cfg.BrightnessDelta > 0 {
 		bright = random.RandInt(-cfg.BrightnessDelta, cfg.BrightnessDelta)
 	}
-	applyGammaBrightnessNoise(out, gamma, bright, cfg.NoiseAmt)
+	if gamma != 1.0 || bright != 0 || cfg.NoiseAmt > 0 {
+		applyGammaBrightnessNoise(out, gamma, bright, cfg.NoiseAmt)
+	}
 
-	blurRoll := randFloat() < cfg.SoftBlurProb
-	sharpRoll := randFloat() < cfg.SoftSharpenProb
+	blurRoll := cfg.SoftBlurProb > 0 && randFloat() < cfg.SoftBlurProb
+	sharpRoll := cfg.SoftSharpenProb > 0 && randFloat() < cfg.SoftSharpenProb
 	switch {
 	case blurRoll && !sharpRoll:
 		out = softBlur(out)
@@ -73,22 +79,14 @@ func DistortTileWith(src image.Image, cfg TileDistortConfig) image.Image {
 }
 
 func normalizeTileDistort(cfg TileDistortConfig) TileDistortConfig {
+	// Fully empty → photometric defaults.
+	if cfg.ScaleDelta == 0 && cfg.WarpPxMax == 0 && cfg.WarpPxMin == 0 &&
+		cfg.GammaMax == 0 && cfg.GammaMin == 0 &&
+		cfg.BrightnessDelta == 0 && cfg.NoiseAmt == 0 &&
+		cfg.SoftBlurProb == 0 && cfg.SoftSharpenProb == 0 {
+		return defaultTileDistort()
+	}
 	d := defaultTileDistort()
-	if cfg.ScaleDelta <= 0 && cfg.WarpPxMax <= 0 && cfg.GammaMax <= 0 {
-		return d
-	}
-	if cfg.ScaleDelta > 0 {
-		d.ScaleDelta = cfg.ScaleDelta
-	}
-	if cfg.WarpPxMax > 0 || cfg.WarpPxMin > 0 {
-		d.WarpPxMin, d.WarpPxMax = cfg.WarpPxMin, cfg.WarpPxMax
-		if d.WarpPxMin <= 0 {
-			d.WarpPxMin = 1
-		}
-		if d.WarpPxMax < d.WarpPxMin {
-			d.WarpPxMax = d.WarpPxMin
-		}
-	}
 	if cfg.GammaMax > 0 || cfg.GammaMin > 0 {
 		d.GammaMin, d.GammaMax = cfg.GammaMin, cfg.GammaMax
 		if d.GammaMin <= 0 {
@@ -98,20 +96,21 @@ func normalizeTileDistort(cfg TileDistortConfig) TileDistortConfig {
 			d.GammaMax = d.GammaMin
 		}
 	}
-	d.BrightnessDelta = cfg.BrightnessDelta
-	if d.BrightnessDelta < 0 {
-		d.BrightnessDelta = defaultTileDistort().BrightnessDelta
+	if cfg.BrightnessDelta > 0 {
+		d.BrightnessDelta = cfg.BrightnessDelta
+	} else if cfg.BrightnessDelta < 0 {
+		d.BrightnessDelta = 0
 	}
-	d.NoiseAmt = cfg.NoiseAmt
-	if d.NoiseAmt < 0 {
-		d.NoiseAmt = defaultTileDistort().NoiseAmt
+	if cfg.NoiseAmt > 0 {
+		d.NoiseAmt = cfg.NoiseAmt
+	} else if cfg.NoiseAmt < 0 {
+		d.NoiseAmt = 0
 	}
-	if cfg.SoftBlurProb >= 0 {
-		d.SoftBlurProb = cfg.SoftBlurProb
-	}
-	if cfg.SoftSharpenProb >= 0 {
-		d.SoftSharpenProb = cfg.SoftSharpenProb
-	}
+	d.ScaleDelta = math.Max(0, cfg.ScaleDelta)
+	d.WarpPxMin = math.Max(0, cfg.WarpPxMin)
+	d.WarpPxMax = math.Max(d.WarpPxMin, cfg.WarpPxMax)
+	d.SoftBlurProb = math.Max(0, cfg.SoftBlurProb)
+	d.SoftSharpenProb = math.Max(0, cfg.SoftSharpenProb)
 	return d
 }
 

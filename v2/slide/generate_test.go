@@ -51,8 +51,13 @@ func TestDefaultAutoSlotCount(t *testing.T) {
 	if opts.GetGenGraphNumber() != 0 {
 		t.Fatalf("default slots want 0 (auto), got %d", opts.GetGenGraphNumber())
 	}
-	if opts.GetCandidateSlotsMin() != 4 || opts.GetCandidateSlotsMax() != 5 {
-		t.Fatalf("auto range want 4–5, got %d–%d", opts.GetCandidateSlotsMin(), opts.GetCandidateSlotsMax())
+	if opts.GetCandidateSlotsMin() != 4 || opts.GetCandidateSlotsMax() != 4 {
+		t.Fatalf("auto range want 4–4 (1 real + 3 decoy), got %d–%d",
+			opts.GetCandidateSlotsMin(), opts.GetCandidateSlotsMax())
+	}
+	d := opts.GetTileDistort()
+	if d.ScaleDelta != 0 || d.WarpPxMax != 0 || d.SoftBlurProb != 0 {
+		t.Fatalf("default distort must be photometric-only, got %+v", d)
 	}
 }
 
@@ -124,20 +129,52 @@ func TestGenerateSlotCountInRange(t *testing.T) {
 		shapeGraph(0, 255, 0, 200),
 		shapeGraph(0, 0, 255, 200),
 	})
-	seen := map[int]bool{}
-	for i := 0; i < 40; i++ {
+	for i := 0; i < 20; i++ {
 		data, err := capt.Generate()
 		if err != nil {
 			t.Fatal(err)
 		}
 		n := data.GetSlotCount()
-		if n < 4 || n > 5 {
-			t.Fatalf("slot count %d outside [4,5]", n)
+		if n != 4 {
+			t.Fatalf("default slot count want 4 (1+3), got %d", n)
 		}
-		seen[n] = true
 	}
-	if len(seen) < 2 {
-		t.Fatalf("expected variety in auto slot counts, got %v", seen)
+}
+
+func TestExactRealHoleMatchesTileCrop(t *testing.T) {
+	c := &captcha{opts: NewOptions(), drawImage: NewDrawImage(), resources: NewResources()}
+	defaultOptions()(c.opts)
+	bg := texturedBG(300, 220)
+	mask := solid(64, 64, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+	overlay := solid(64, 64, color.NRGBA{R: 0, G: 0, B: 0, A: 0})
+	block := &Block{X: 120, Y: 80, Width: 64, Height: 64}
+
+	tile, err := c.genTileImage(mask, bg, overlay, block)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Without photometric distort, masked opaque pixels must equal the bg crop.
+	tb := tile.Bounds()
+	mismatch := 0
+	checked := 0
+	for y := 0; y < block.Height; y++ {
+		for x := 0; x < block.Width; x++ {
+			tc := color.NRGBAModel.Convert(tile.At(tb.Min.X+x, tb.Min.Y+y)).(color.NRGBA)
+			if tc.A < 200 {
+				continue
+			}
+			bc := bg.NRGBAAt(block.X+x, block.Y+y)
+			checked++
+			if abs8(int(tc.R)-int(bc.R)) > 2 || abs8(int(tc.G)-int(bc.G)) > 2 || abs8(int(tc.B)-int(bc.B)) > 2 {
+				mismatch++
+			}
+		}
+	}
+	if checked < 100 {
+		t.Fatalf("too few opaque tile pixels: %d", checked)
+	}
+	if mismatch > checked/50 {
+		t.Fatalf("tile crop must match hole coordinates, mismatch=%d/%d", mismatch, checked)
 	}
 }
 
@@ -204,13 +241,12 @@ func TestTileNotExactCrop(t *testing.T) {
 			sumAbs += float64(abs8(int(a.R)-int(b.R)) + abs8(int(a.G)-int(b.G)) + abs8(int(a.B)-int(b.B)))
 		}
 	}
-	if diff < 50 {
-		t.Fatalf("tile must not be pixel-perfect crop, changed=%d", diff)
+	if diff < 20 {
+		t.Fatalf("photometric noise/gamma must break pixel-perfect match, changed=%d", diff)
 	}
 	meanAbs := sumAbs / float64(64*64*3)
-	// Mild transforms: average channel drift should stay small for humans.
-	if meanAbs > 35 {
-		t.Fatalf("distort too strong for UX (mean abs channel delta=%.1f)", meanAbs)
+	if meanAbs > 20 {
+		t.Fatalf("photometric distort too strong (mean abs=%.1f)", meanAbs)
 	}
 }
 

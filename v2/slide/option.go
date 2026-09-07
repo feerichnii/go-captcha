@@ -10,13 +10,13 @@ import (
 	"github.com/feerichnii/go-captcha/v2/base/option"
 )
 
-// TileDistortConfig controls mild anti-template transforms on the public tile.
-// Transforms must break pixel-perfect crop matching without making the tile
-// hard for a human to recognize in 1–2 seconds.
+// TileDistortConfig controls anti-template transforms on the public tile.
+// Geometry of the puzzle piece must stay exact: only photometric changes and
+// independent noise are applied by default (no scale/warp/blur deformations).
 type TileDistortConfig struct {
-	// ScaleDelta is max |scale-1| (default 0.02 → ±2%).
+	// ScaleDelta is max |scale-1|. Default 0 (disabled) — geometric.
 	ScaleDelta float64
-	// WarpPxMin / WarpPxMax are sinusoidal warp amplitudes in pixels (default 1–2).
+	// WarpPxMin / WarpPxMax sinusoidal warp in pixels. Default 0 (disabled).
 	WarpPxMin float64
 	WarpPxMax float64
 	// GammaMin / GammaMax (default 0.95–1.05).
@@ -24,12 +24,10 @@ type TileDistortConfig struct {
 	GammaMax float64
 	// BrightnessDelta is max absolute RGB brightness shift (default 6).
 	BrightnessDelta int
-	// NoiseAmt is max per-channel noise amplitude (default 3 = low).
+	// NoiseAmt is max per-channel independent noise (default 3).
 	NoiseAmt int
-	// SoftBlurProb is chance [0,1] of a very weak blur (default 0.35).
-	SoftBlurProb float64
-	// SoftSharpenProb is chance [0,1] of a very weak sharpen (default 0.35).
-	// Blur and sharpen are mutually exclusive; if both roll, neither applies.
+	// SoftBlurProb / SoftSharpenProb — default 0 (disabled; geometric softening).
+	SoftBlurProb    float64
 	SoftSharpenProb float64
 }
 
@@ -43,7 +41,7 @@ type Options struct {
 	genGraphNumber            int
 	enableGraphVerticalRandom bool
 
-	// candidateSlotsMin/Max used when genGraphNumber < 1 (auto). Defaults 4–5.
+	// candidateSlotsMin/Max used when genGraphNumber < 1 (auto). Default 4–4.
 	candidateSlotsMin int
 	candidateSlotsMax int
 	// minSlotSepPx is minimum center-to-center distance between slots (0 = derive).
@@ -154,7 +152,7 @@ func WithRangeGraphAnglePos(vals []option.RangeVal) Option {
 }
 
 // WithGenGraphNumber sets how many drop slots (notches) are drawn on the master
-// image. Values < 1 mean auto (random CandidateSlotsMin–Max). Default is auto.
+// image. Values < 1 mean auto (CandidateSlotsMin–Max; default exactly 4).
 // Only the secret target from GetData() is valid; decoy coordinates are never
 // exposed via GetPublicData().
 func WithGenGraphNumber(val int) Option {

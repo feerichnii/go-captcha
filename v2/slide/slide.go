@@ -41,7 +41,7 @@ var (
 
 const (
 	fallbackSlotMin = 4
-	fallbackSlotMax = 5
+	fallbackSlotMax = 4
 )
 
 // captcha is the concrete implementation of the Captcha interface
@@ -100,13 +100,16 @@ func (c *captcha) resolveSlotCount() int {
 	if hi < lo {
 		hi = lo
 	}
+	if hi < 1 {
+		hi = fallbackSlotMax
+	}
 	return random.RandInt(lo, hi)
 }
 
-// Generate generates slide CAPTCHA data with multiple drop slots (default random 4–5).
-// All slots share the same silhouette; humans (and bots) must match the tile
-// to the background crop — only one position is correct. The secret (X,Y) is
-// only available via GetData() — never GetPublicData().
+// Generate builds a slide puzzle with exact geometry:
+// the real hole is drawn at the same (X,Y) the tile was cropped from;
+// all candidate holes share one mask/shape; anti-template protection is
+// photometric-only on the tile pixels (default: 1 real + 3 decoys).
 func (c *captcha) Generate() (CaptchaData, error) {
 	if err := c.check(); err != nil {
 		return nil, err
@@ -122,51 +125,43 @@ func (c *captcha) Generate() (CaptchaData, error) {
 		return nil, GenerateDataErr
 	}
 
-	correctIdx := 0
-	if len(blocks) > 1 {
-		correctIdx = helper.RandIndex(len(blocks))
-		if correctIdx < 0 {
-			correctIdx = 0
-		}
-	}
-	// genGraphBlocksScattered puts the tile-source (correct) block at index 0.
-	if correctIdx != 0 {
-		blocks[0], blocks[correctIdx] = blocks[correctIdx], blocks[0]
-	}
-	block := blocks[correctIdx]
-	if block == nil {
+	// Index 0 is always the real hole / tile-source (exact crop coordinates).
+	real := blocks[0]
+	if real == nil {
 		return nil, GenerateDataErr
 	}
 
-	graphs := c.pickSlotGraphs(len(blocks), correctIdx)
-	if graphs == nil || graphs[correctIdx] == nil {
+	graphs := c.pickSlotGraphs(len(blocks), 0)
+	if graphs == nil || graphs[0] == nil {
 		return nil, GraphImageErr
 	}
-	correct := graphs[correctIdx]
-	if correct.OverlayImage == nil || correct.ShadowImage == nil || correct.MaskImage == nil {
+	piece := graphs[0]
+	if piece.OverlayImage == nil || piece.ShadowImage == nil || piece.MaskImage == nil {
 		return nil, GraphImageErr
 	}
 
+	// Tile from the exact real-hole coordinates on the clean master background.
+	tileImage, err := c.genTileImage(piece.MaskImage, masterBg, piece.OverlayImage, real)
+	if err != nil {
+		return nil, err
+	}
+	// Photometric anti-template only — does not change puzzle geometry.
+	tileImage = DistortTileWith(tileImage, c.opts.tileDistort)
+
+	// Draw identical-shaped holes (same shadow/mask) at real + decoy positions.
 	masterImage, err := c.genMasterImageOn(masterBg, size, blocks, graphs)
 	if err != nil {
 		return nil, err
 	}
 
-	tileImage, err := c.genTileImage(correct.MaskImage, masterBg, correct.OverlayImage, block)
-	if err != nil {
-		return nil, err
-	}
-	tileImage = DistortTileWith(tileImage, c.opts.tileDistort)
-
-	// Horizontal slide: tile starts on the left at the correct slot's Y
-	// (drag stays 1D; decoys may sit at other Y for natural layout).
-	block.TileX = tilePoint.X
-	block.DX = tilePoint.X
-	block.TileY = block.Y
-	block.DY = block.Y
+	real.TileX = tilePoint.X
+	real.DX = tilePoint.X
+	real.TileY = real.Y
+	real.DY = real.Y
+	real.Angle = 0
 
 	return &CaptData{
-		block:       block,
+		block:       real,
 		slotCount:   len(blocks),
 		masterImage: imagedata.NewJPEGImageData(masterImage),
 		tileImage:   imagedata.NewPNGImageData(tileImage),
