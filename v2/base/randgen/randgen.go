@@ -87,3 +87,66 @@ func RangCutImagePos(width int, height int, img image.Image) image.Point {
 		Y: curY,
 	}
 }
+
+// RangCutImagePosTextured picks a crop origin that prefers high-contrast /
+// textured regions (avoids flat sky/water). samples is how many random
+// candidates to score; values ≤0 use 12.
+func RangCutImagePosTextured(width, height int, img image.Image, samples int) image.Point {
+	if img == nil || width <= 0 || height <= 0 {
+		return image.Point{}
+	}
+	if samples <= 0 {
+		samples = 12
+	}
+	b := img.Bounds()
+	maxX := b.Dx() - width
+	maxY := b.Dy() - height
+	if maxX <= 0 && maxY <= 0 {
+		return image.Point{X: b.Min.X, Y: b.Min.Y}
+	}
+	if maxX < 0 {
+		maxX = 0
+	}
+	if maxY < 0 {
+		maxY = 0
+	}
+
+	best := RangCutImagePos(width, height, img)
+	bestScore := cropTextureScore(img, best.X, best.Y, width, height)
+	for i := 0; i < samples; i++ {
+		p := image.Point{X: b.Min.X, Y: b.Min.Y}
+		if maxX > 0 {
+			p.X = b.Min.X + random.RandIntFast(0, maxX)
+		}
+		if maxY > 0 {
+			p.Y = b.Min.Y + random.RandIntFast(0, maxY)
+		}
+		s := cropTextureScore(img, p.X, p.Y, width, height)
+		if s > bestScore {
+			bestScore = s
+			best = p
+		}
+	}
+	return best
+}
+
+// cropTextureScore estimates how "busy" a crop is via downsampled luminance variance.
+func cropTextureScore(img image.Image, x0, y0, w, h int) float64 {
+	const step = 3
+	var sum, sumSq float64
+	var n float64
+	for y := y0; y < y0+h; y += step {
+		for x := x0; x < x0+w; x += step {
+			r, g, b, _ := img.At(x, y).RGBA()
+			lum := (0.299*float64(r) + 0.587*float64(g) + 0.114*float64(b)) / 65535.0
+			sum += lum
+			sumSq += lum * lum
+			n++
+		}
+	}
+	if n < 2 {
+		return 0
+	}
+	mean := sum / n
+	return sumSq/n - mean*mean
+}

@@ -17,8 +17,8 @@ all drop slots share the same silhouette, so visual content is the cue.
 | `bg_picnic.png`        | Garden picnic with animals, quilt, and treehouse   |
 
 All images are square RGB PNG (1024×1024 or 1536×1536). The library randomly
-crops a master-sized region (default `300x220`) from each background, so larger
-source images add positional variety.
+crops a master-sized region (default `300x220`) and prefers high-variance /
+textured areas so slide notches stay readable on dense illustration art.
 
 ## Usage
 

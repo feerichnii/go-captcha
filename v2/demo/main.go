@@ -278,11 +278,32 @@ func makeGraph(shape func(img *image.NRGBA)) *slide.GraphImage {
 			if a == 0 {
 				continue
 			}
-			shadow.SetNRGBA(x, y, color.NRGBA{R: 12, G: 14, B: 18, A: uint8(float64(a) * 95 / 255)})
-			overlay.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: uint8(float64(a) * 55 / 255)})
+			// Dual-tone notch: light rim + dark fill so holes read on both
+			// bright picnic art and dark neon/underwater crops.
+			if maskEdge(mask, x, y, s) {
+				shadow.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: uint8(float64(a) * 170 / 255)})
+			} else {
+				shadow.SetNRGBA(x, y, color.NRGBA{R: 8, G: 10, B: 14, A: uint8(float64(a) * 145 / 255)})
+			}
+			overlay.SetNRGBA(x, y, color.NRGBA{R: 255, G: 255, B: 255, A: uint8(float64(a) * 90 / 255)})
 		}
 	}
 	return &slide.GraphImage{OverlayImage: overlay, ShadowImage: shadow, MaskImage: mask}
+}
+
+func maskEdge(mask *image.NRGBA, x, y, s int) bool {
+	for dy := -1; dy <= 1; dy++ {
+		for dx := -1; dx <= 1; dx++ {
+			if dx == 0 && dy == 0 {
+				continue
+			}
+			nx, ny := x+dx, y+dy
+			if nx < 0 || ny < 0 || nx >= s || ny >= s || mask.NRGBAAt(nx, ny).A == 0 {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // jigsawPiece draws a smooth puzzle tile: rounded body, top tab, right socket.
