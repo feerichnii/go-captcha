@@ -108,9 +108,9 @@ func (c *captcha) GetOptions() *Options {
 }
 
 // Generate generates slide CAPTCHA data with multiple drop slots (default 3).
-// Only one slot is correct: its shadow matches the tile shape. Other slots are
-// decoys drawn with different shadow shapes when multiple GraphImages are provided.
-// The secret correct (X,Y) is only available via GetData() — never GetPublicData().
+// All slots share the same silhouette; humans (and bots) must match the tile
+// to the background crop — only one position is correct. The secret (X,Y) is
+// only available via GetData() — never GetPublicData().
 func (c *captcha) Generate() (CaptchaData, error) {
 	if err := c.check(); err != nil {
 		return nil, err
@@ -174,49 +174,29 @@ func (c *captcha) Generate() (CaptchaData, error) {
 	}, nil
 }
 
-// pickSlotGraphs assigns a GraphImage per slot. The correct slot gets a randomly
-// chosen graph; other slots prefer different graphs so decoy notches do not
-// match the tile silhouette. Falls back to the correct graph when the pool has
-// only one shape.
+// pickSlotGraphs picks one GraphImage from the pool and assigns that same
+// silhouette to every drop slot. Decoys differ only by where they sit on the
+// background — matching is by image content, not shape.
 func (c *captcha) pickSlotGraphs(nSlots, correctIdx int) []*GraphImage {
 	pool := c.resources.rangGraphImage
 	if len(pool) == 0 || nSlots <= 0 {
 		return nil
 	}
-	correctPoolIdx := helper.RandIndex(len(pool))
-	if correctPoolIdx < 0 {
-		correctPoolIdx = 0
+	_ = correctIdx
+	idx := helper.RandIndex(len(pool))
+	if idx < 0 {
+		idx = 0
 	}
+	g := pool[idx]
 	out := make([]*GraphImage, nSlots)
-	out[correctIdx] = pool[correctPoolIdx]
-
-	decoyIdxs := make([]int, 0, len(pool))
-	for i := range pool {
-		if len(pool) == 1 || i != correctPoolIdx {
-			decoyIdxs = append(decoyIdxs, i)
-		}
-	}
-
-	work := append([]int(nil), decoyIdxs...)
 	for i := 0; i < nSlots; i++ {
-		if i == correctIdx {
-			continue
-		}
-		if len(work) == 0 {
-			work = append([]int(nil), decoyIdxs...)
-		}
-		j := helper.RandIndex(len(work))
-		if j < 0 {
-			j = 0
-		}
-		out[i] = pool[work[j]]
-		work = append(work[:j], work[j+1:]...)
+		out[i] = g
 	}
 	return out
 }
 
 // genMasterImage generates the master CAPTCHA image and background image.
-// Each slot uses graphs[i].ShadowImage so decoys can differ from the tile.
+// Every slot uses the same ShadowImage silhouette at different positions.
 func (c *captcha) genMasterImage(size *option.Size, blocks []*Block, graphs []*GraphImage) (image.Image, image.Image, error) {
 	var drawBlocks = make([]*DrawBlock, 0, len(blocks))
 	for i := 0; i < len(blocks); i++ {

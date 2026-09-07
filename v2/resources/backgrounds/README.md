@@ -1,19 +1,19 @@
 # Bundled backgrounds
 
-A fresh set of high-complexity, high-entropy background images for GoCaptcha masters.
-They are intentionally busy (no large flat regions, no readable text) to raise the cost
-of OCR / contour-based solvers.
+Readable, landmark-rich backgrounds for GoCaptcha masters. Dense color and
+texture across the frame help humans match the slide tile by image alignment;
+all drop slots share the same silhouette, so visual content is the cue.
 
-| File              | Theme                                   |
-|-------------------|-----------------------------------------|
-| `bg_mosaic.png`   | Dense low-poly geometric mosaic         |
-| `bg_foliage.png`  | Close-up tropical foliage               |
-| `bg_circuit.png`  | Macro circuit board                     |
-| `bg_graffiti.png` | Abstract graffiti splatter              |
-| `bg_agate.png`    | Swirling agate / marble mineral veins   |
-| `bg_autumn.png`   | Carpet of overlapping autumn leaves     |
-| `bg_yarn.png`     | Tangled multicolor yarn strands         |
-| `bg_city.png`     | High aerial view of a dense city        |
+| File              | Theme                                         |
+|-------------------|-----------------------------------------------|
+| `bg_meadow.png`   | Sunny meadow, path, and a single tree         |
+| `bg_lakeside.png` | Calm lake with pier and distant hills         |
+| `bg_desert.png`   | Golden dunes with soft shadows                |
+| `bg_flowers.png`  | Large blooms on a soft garden blur            |
+| `bg_coast.png`    | Beach bands: sky, turquoise water, sand       |
+| `bg_fruit.png`    | Dense fruit market colors                     |
+| `bg_toys.png`     | Colorful wooden toys on a patterned quilt     |
+| `bg_forest.png`   | Autumn forest path with leaf cover            |
 
 All images are `720x540` RGB PNG. The library randomly crops a master-sized region
 (default `300x220`) from each background, so larger source images add positional variety.
@@ -21,6 +21,6 @@ All images are `720x540` RGB PNG. The library randomly crops a master-sized regi
 ## Usage
 
 ```go
-bg, _ := codec.DecodeByteToPng(mustRead("bg_mosaic.png"))
+bg, _ := codec.DecodeByteToPng(mustRead("bg_fruit.png"))
 builder.SetResources(slide.WithBackgrounds([]image.Image{bg}))
 ```
