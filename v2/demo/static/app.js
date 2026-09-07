@@ -21,6 +21,54 @@ function nowMs() {
   return Date.now();
 }
 
+/** Mobile range inputs often omit pointerup; dwell must precede first move. */
+function ensureTrajectory(snap, kind, tileW, tileH) {
+  const out = {
+    points: Array.isArray(snap?.points) ? snap.points.slice() : [],
+    events: Array.isArray(snap?.events) ? snap.events.slice() : [],
+    coalesced_total: snap?.coalesced_total || 0,
+  };
+  if (snap?.piece_down) out.piece_down = { ...snap.piece_down };
+
+  if (out.points.length < 1 && (kind === "slide" || kind === "drag" || kind === "rotate")) {
+    return out;
+  }
+
+  const isDown = (e) => /^(pointerdown|mousedown|touchstart)$/i.test(e);
+  const isMove = (e) => /^(pointermove|mousemove|touchmove)$/i.test(e);
+  const isUp = (e) => /^(pointerup|mouseup|touchend|pointercancel|touchcancel)$/i.test(e);
+  let seenDown = false;
+  let seenMove = false;
+  let seenUp = false;
+  for (const e of out.events) {
+    if (isDown(e)) seenDown = true;
+    else if (isMove(e) && seenDown) seenMove = true;
+    else if (isUp(e) && seenDown) seenUp = true;
+  }
+  if (!(seenDown && seenMove && seenUp)) {
+    out.events = ["pointerdown", "pointermove", "pointerup"];
+  }
+
+  const tw = Math.max(2, Number(tileW) || 40);
+  const th = Math.max(2, Number(tileH) || 40);
+  const cx = Math.min(tw, Math.max(1, tw / 2));
+  const cy = Math.min(th, Math.max(1, th / 2));
+  const p0 = out.points[0];
+  const dwellPad = 40;
+  if (!out.piece_down && p0) {
+    out.piece_down = { x: cx, y: cy, t: p0.t - dwellPad };
+  } else if (out.piece_down && p0) {
+    if (!(out.piece_down.t > 0) || out.piece_down.t > p0.t - 16) {
+      out.piece_down = {
+        x: Math.min(tw, Math.max(0, out.piece_down.x ?? cx)),
+        y: Math.min(th, Math.max(0, out.piece_down.y ?? cy)),
+        t: p0.t - dwellPad,
+      };
+    }
+  }
+  return out;
+}
+
 function $(sel, root = document) {
   return root.querySelector(sel);
 }
@@ -227,15 +275,11 @@ async function verifyCard(card) {
   try {
     const tracker = card._tracker;
     tracker?.stop();
-    const snap = tracker?.snapshot() || { points: [], events: [] };
-    // Ensure down→move→up if slider produced points without full event set
-    if (snap.points?.length >= 2 && (!snap.events || snap.events.length < 3)) {
-      snap.events = ["pointerdown", "pointermove", "pointerup"];
-    }
-    if (!snap.piece_down && (kind === "slide" || kind === "drag" || kind === "rotate") && snap.points?.length) {
-      const p0 = snap.points[0];
-      snap.piece_down = { x: 10, y: 10, t: p0.t - 20 };
-    }
+    const raw = tracker?.snapshot() || { points: [], events: [] };
+    const pub = ch.public || {};
+    const tileW = pub.width || (kind === "rotate" ? 150 : 60);
+    const tileH = pub.height || tileW;
+    const snap = ensureTrajectory(raw, kind, tileW, tileH);
 
     let answer;
     if (kind === "rotate") {
