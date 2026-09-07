@@ -103,3 +103,26 @@ func TestWithGenGraphNumberMinOne(t *testing.T) {
 		t.Fatalf("got %d", opts.GetGenGraphNumber())
 	}
 }
+
+func TestBasicTargetsReachableBySlider(t *testing.T) {
+	capt := testSlideCaptcha(t, []*GraphImage{
+		shapeGraph(255, 0, 0, 200),
+		shapeGraph(0, 255, 0, 200),
+		shapeGraph(0, 0, 255, 200),
+	})
+	const masterW = 300
+	for i := 0; i < 80; i++ {
+		data, err := capt.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		blk := data.GetData()
+		maxX := masterW - blk.Width
+		if blk.X < 0 || blk.X > maxX {
+			t.Fatalf("target X=%d outside slider reach [0,%d] (W=%d)", blk.X, maxX, blk.Width)
+		}
+		if blk.X+blk.Width > masterW {
+			t.Fatalf("notch spills past master: X=%d W=%d", blk.X, blk.Width)
+		}
+	}
+}

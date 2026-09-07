@@ -9,7 +9,6 @@ package slide
 import (
 	"errors"
 	"image"
-	"math"
 
 	"github.com/feerichnii/go-captcha/v2/base/helper"
 	"github.com/feerichnii/go-captcha/v2/base/imagedata"
@@ -301,16 +300,55 @@ func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, 
 	cWidth := randSize
 
 	dzdType := c.randDeadZoneDirection()
-	dp := cWidth / 2
-	blockWidth := (width - cWidth - 20) / length
+	maxX := width - cWidth
+	if maxX < 0 {
+		maxX = 0
+	}
+	// Keep notches fully on-canvas so a horizontal slider can always reach them
+	// (demo clamps tile left to [0, masterW-tileW]).
+	leftMin := 5
+	if dzdType == DeadZoneDirectionTypeLeft {
+		// Leave room on the left for the ModeBasic tile start.
+		leftMin = cWidth + 5
+	}
+	if leftMin > maxX {
+		leftMin = 0
+	}
+	usable := maxX - leftMin
+	if usable < 0 {
+		usable = 0
+	}
+
 	y := c.calcYWithDeadZone(5, height-cHeight-5, cHeight, dzdType)
 
 	for i := 0; i < length; i++ {
 		var block = &Block{}
-		start, end := c.calcXWithDeadZone((i*blockWidth)+dp+5, ((i+1)*blockWidth)-dp, cWidth, dzdType)
-
-		start = int(math.Max(float64(start), float64(dp+5)))
-		block.X = random.RandInt(start+20, end+20) - dp
+		seg := 0
+		if length > 0 {
+			seg = usable / length
+		}
+		start := leftMin + i*seg
+		end := start + seg
+		if i == length-1 {
+			end = maxX
+		}
+		if end > maxX {
+			end = maxX
+		}
+		if start > end {
+			start = end
+		}
+		if end-start >= 6 {
+			block.X = random.RandInt(start+2, end-2)
+		} else {
+			block.X = random.RandInt(start, end)
+		}
+		if block.X > maxX {
+			block.X = maxX
+		}
+		if block.X < 0 {
+			block.X = 0
+		}
 
 		if c.opts.enableGraphVerticalRandom {
 			y = c.calcYWithDeadZone(5, height-cHeight-5, cHeight, dzdType)
@@ -326,22 +364,25 @@ func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, 
 
 	point := &option.Point{}
 	if c.mode == ModeBasic {
-		point.X = random.RandInt(5, dp)
+		point.X = random.RandInt(5, cWidth/2)
+		if point.X > maxX {
+			point.X = maxX
+		}
 		point.Y = y
 		return blocks, point
 	}
 
 	if dzdType == DeadZoneDirectionTypeTop {
-		point.X = random.RandInt(5, width-cWidth-5)
+		point.X = random.RandInt(5, maxX)
 		point.Y = 5
 	} else if dzdType == DeadZoneDirectionTypeBottom {
-		point.X = random.RandInt(5, width-cWidth-5)
+		point.X = random.RandInt(5, maxX)
 		point.Y = height - cHeight - 5
 	} else if dzdType == DeadZoneDirectionTypeLeft {
 		point.X = 5
 		point.Y = random.RandInt(5, height-cHeight-5)
 	} else if dzdType == DeadZoneDirectionTypeRight {
-		point.X = width - cWidth - 5
+		point.X = maxX
 		point.Y = random.RandInt(5, height-cHeight-5)
 	}
 
