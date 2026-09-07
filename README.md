@@ -12,7 +12,7 @@
 > English | [中文](README_zh.md)
 
 <p align="center">
-<b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides all four interactive CAPTCHA types (<b>Click</b>, <b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, AEAD-encrypted challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
+<b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides three interactive CAPTCHA types (<b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, AEAD-encrypted challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
 </p>
 
 <p align="center"> ⭐️ If it helps you, please give it a star.</p>
@@ -30,13 +30,13 @@
 This edition focuses on making the CAPTCHA hard for automated solvers without changing the ergonomics of the original API. Three things ship on top of upstream GoCaptcha:
 
 - **Safer-by-default answers** — `GetPublicData()` returns everything the browser needs and nothing it shouldn't. The real answer (`GetData()`) never has to leave the server, and can be encrypted at rest (AES-256-GCM) by the `antibot` layer or sealed into an opaque AEAD token via [`v2/base/challenge`](v2/base/challenge).
-- **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get decoy shadows and edge jitter, rotate masters get rim noise, and click thumbnails are deformed by default. See [SECURITY.md](SECURITY.md).
+- **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get decoy shadows and edge jitter, and rotate masters get rim noise. See [SECURITY.md](SECURITY.md).
 - **The `antibot` layer** — a drop-in orchestration package ([`v2/antibot`](v2/antibot)) that manages the challenge lifecycle (crypto ID, TTL, single-use, attempt caps), scores pointer trajectories, rate-limits per client, and issues adaptive proof-of-work to suspicious clients. Backed by in-memory or Redis storage.
 - **Bundled high-complexity backgrounds** — a fresh set of dense, high-entropy background images ships under [`v2/resources/backgrounds`](v2/resources/backgrounds), so masters are harder to segment for OCR/contour-based solvers out of the box.
 
 | Capability            | Upstream | AntiBot Edition |
 |-----------------------|:--------:|:---------------:|
-| Click / Slide / Drag / Rotate | ✅ | ✅ |
+| Slide / Drag / Rotate | ✅ | ✅ |
 | Public vs. secret data split  | –  | ✅ `GetPublicData()` |
 | Crypto RNG for answers        | –  | ✅ |
 | Image interference / decoys   | –  | ✅ |
@@ -76,7 +76,7 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 
 ## Core Features
 
-- **Diverse CAPTCHA Types**: Supports Click, Slide, Rotate, and Drag behavioral CAPTCHAs, suitable for various interaction scenarios.
+- **Diverse CAPTCHA Types**: Supports Slide, Rotate, and Drag behavioral CAPTCHAs, suitable for various interaction scenarios.
 - **Bot-resistant by design**: Cryptographic answer randomness, image interference/decoys, and a public/secret data split so answers never reach the browser.
 - **Full AntiBot orchestration**: Challenge lifecycle, trajectory scoring, rate limiting, and adaptive proof-of-work in a single [`antibot`](v2/antibot) package.
 - **Highly Customizable**: Flexible configuration of images, fonts, colors, angles, sizes, etc., through Options and Resources.
@@ -89,12 +89,11 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 
 ## CAPTCHA Types
 
-`go-captcha` supports the following four CAPTCHA types, each with unique interaction methods, generation logic, and application scenarios:
+`go-captcha` supports the following three CAPTCHA types, each with unique interaction methods, generation logic, and application scenarios:
 
-1. **Click CAPTCHA**: Users click specified points or characters on the main image, supporting text and graphic modes.
-2. **Slide CAPTCHA**: Users slide a puzzle piece to the correct position on the main image, supporting basic and drag-drop modes.
-3. **Drag-Drop CAPTCHA**: A variant of the Slide CAPTCHA, allowing users to drag-drop a puzzle piece to a target position within a larger range.
-4. **Rotate CAPTCHA**: Users rotate a thumbnail to align with the main image’s angle.
+1. **Slide CAPTCHA**: Users slide a puzzle piece to the correct position on the main image, supporting basic and drag-drop modes.
+2. **Drag-Drop CAPTCHA**: A variant of the Slide CAPTCHA, allowing users to drag-drop a puzzle piece to a target position within a larger range.
+3. **Rotate CAPTCHA**: Users rotate a thumbnail to align with the main image’s angle.
 
 <br/>
 
@@ -108,7 +107,7 @@ $ go get -u github.com/feerichnii/go-captcha/v2@latest
 package main
 
 // Import modules on demand
-import "github.com/feerichnii/go-captcha/v2/${click|slide|rotate}"
+import "github.com/feerichnii/go-captcha/v2/${slide|rotate}"
 
 func main(){
    // ...
@@ -116,219 +115,6 @@ func main(){
 ```
 
 <br />
-
-## 🖖 Click CAPTCHA
-
-The Click CAPTCHA requires users to click specified points or characters on the main image, ideal for quick verification scenarios. It supports two modes:
-
-- **Text Mode**：Displays characters (e.g., letters, numbers, or Chinese characters), and users click the corresponding characters.
-- **Graphic Mode**：Displays graphics (e.g., icons or shapes), and users click the corresponding graphics.
-
-### How It Works
-
-1. **Generate Main Image** (`masterImage`): Contains randomly distributed points or characters, typically in JPEG format.
-2. **Generate Thumbnail** (`thumbImage`): Displays the target points or characters to be clicked, typically in PNG format.
-3. **User Interaction**: Users click coordinates on the main image, and the frontend captures and sends the coordinates to the backend.
-4. **Verification Logic**: The backend compares the clicked coordinates with the target points (`dots`) to verify a match.
-
-### Code Example
-```go
-package main
-
-import (
-	"encoding/json"
-	"fmt"
-	"image"
-	"log"
-	"io/ioutil"
-
-	"github.com/golang/freetype"
-	"github.com/golang/freetype/truetype"
-	"github.com/feerichnii/go-captcha/v2/base/option"
-	"github.com/feerichnii/go-captcha/v2/click"
-	"github.com/feerichnii/go-captcha/v2/base/codec"
-)
-
-var textCapt click.Captcha
-
-func init() {
-	builder := click.NewBuilder(
-		click.WithRangeLen(option.RangeVal{Min: 4, Max: 6}),
-		click.WithRangeVerifyLen(option.RangeVal{Min: 2, Max: 4}),
-	)
-
-	// You can use preset material resources：https://github.com/wenlng/go-captcha-assets
-	fontN, err := loadFont("../resources/fzshengsksjw_cu.ttf")
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	bgImage, err := loadPng("../resources/bg.png")
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	builder.SetResources(
-		click.WithChars([]string{
-			"1A",
-			"5E",
-			"3d",
-			"0p",
-			"78",
-			"DL",
-			"CB",
-			"9M",
-			// ...
-		}),
-		click.WithFonts([]*truetype.Font{
-			fontN,
-		}),
-		click.WithBackgrounds([]image.Image{
-			bgImage,
-		}),
-	)
-
-	textCapt= builder.Make()
-}
-
-func loadPng(p string) (image.Image, error) {
-	imgBytes, err := ioutil.ReadFile(p)
-	if err != nil {
-		return nil, err
-	}
-	return codec.DecodeByteToPng(imgBytes)
-}
-
-func loadFont(p string) (*truetype.Font, error) {
-	fontBytes, err := ioutil.ReadFile(p)
-	if err != nil {
-		panic(err)
-	}
-	return freetype.ParseFont(fontBytes)
-}
-
-
-func main() {
-	captData, err := textCapt.Generate()
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	dotData := captData.GetData()
-	if dotData == nil {
-		log.Fatalln(">>>>> generate err")
-	}
-
-	// Server-only: persist GetData() (or challenge.Seal). Never JSON this to the browser.
-	// Client-safe metadata:
-	// pub, _ := json.Marshal(captData.GetPublicData())
-	dots, _ := json.Marshal(dotData)
-	fmt.Println(">>>>> ", string(dots))
-
-	var mBase64, tBase64 string
-	mBase64, err = captData.GetMasterImage().ToBase64()
-	if err != nil {
-		fmt.Println(err)
-	}
-	tBase64, err = captData.GetThumbImage().ToBase64()
-	if err != nil {
-		fmt.Println(err)
-	}
-	
-	fmt.Println(">>>>> ", mBase64)
-	fmt.Println(">>>>> ", tBase64)
-	
-	//err = captData.GetMasterImage().SaveToFile("../resources/master.jpg", option.QualityNone)
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-	//err = captData.GetThumbImage().SaveToFile("../resources/thumb.png")
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-}
-```
-
-### Make Instance
-- builder.Make()
-- builder.MakeShape()
-
-### Configuration Options
-> click.NewBuilder(click.WithXxx(), ...) OR builder.SetOptions(click.WithXxx(), ...)
-
-| Options                                    | Desc                                                                               |
-|--------------------------------------------|------------------------------------------------------------------------------------|
-| **Main Image**                             |                                                                                    |
-| click.WithImageSize(option.Size)           | Set main image size, default 300x220                                               |
-| click.WithRangeLen(option.RangeVal)        | Set range for random content length                                                |
-| click.WithRangeAnglePos([]option.RangeVal) | Set range for random angles                                                        |
-| click.WithRangeSize(option.RangeVal)       | Set range for random content size                                                  |
-| click.WithRangeColors([]string)            | Set random colors                                                                  |
-| click.WithDisplayShadow(bool)              | Enable/disable shadow display                                                      |
-| click.WithShadowColor(string)              | Set shadow color                                                                   |
-| click.WithShadowPoint(option.Point)        | Set shadow offset position                                                         |
-| click.WithImageAlpha(float32)              | Set main image transparency                                                        |
-| click.WithUseShapeOriginalColor(bool)      | Use original graphic color (valid for graphic mode)                                |
-| **Thumbnail**                              |                                                                                    |
-| click.WithThumbImageSize(option.Size)      | Set thumbnail size, default 150x40                                                 |
-| click.WithRangeVerifyLen(option.RangeVal)  | Set range for random verification content length                                   |
-| click.WithDisabledRangeVerifyLen(bool)     | Disable random verification length, matches main content                           |
-| click.WithRangeThumbSize(option.RangeVal)  | Set range for random thumbnail content size                                        |
-| click.WithRangeThumbColors([]string)       | Set range for random thumbnail colors                                              |
-| click.WithRangeThumbBgColors([]string)     | Set range for random thumbnail background colors                                   |
-| click.WithIsThumbNonDeformAbility(bool)    | Prevent thumbnail content deformation                                              |
-| click.WithThumbBgDistort(int)              | Set thumbnail background distortion (option.DistortLevel1 to option.DistortLevel5) |
-| click.WithThumbBgCirclesNum(int)           | Set number of small circles in thumbnail background                                |
-| click.WithThumbBgSlimLineNum(int)          | Set number of lines in thumbnail background                                        |
-
-
-### Set Resources
-> builder.SetResources(click.WithXxx(), ...)
-
-| Options                                   | Desc                       |
-|-------------------------------------------|----------------------------|
-| click.WithChars([]string)                 | Set text seed              |
-| click.WithShapes(map[string]image.Image)  | Set graphic seed           |
-| click.WithFonts([]*truetype.Font)         | Set fonts                  |
-| click.WithBackgrounds([]image.Image)      | Set main image backgrounds |
-| click.WithThumbBackgrounds([]image.Image) | Set thumbnail backgrounds  |
-
-### Captcha Data
-> captData, err := capt.Generate()
-
-| Method                                   | Desc                                                   |
-|------------------------------------------|--------------------------------------------------------|
-| GetData() map[int]*Dot                   | Get verification data (**server-only**, secret answer) |
-| GetPublicData() interface{}              | Get client-safe metadata (no answer)                   |
-| GetMasterImage() imagedata.JPEGImageData | Get main image                                         |
-| GetThumbImage() imagedata.PNGImageData   | Get thumbnail                                          |
-
-
-### Validate the captcha
-> ok := click.Validate(srcX, srcY, X, Y, width, height, paddingValue)
-
-For ordered click verification (recommended, resists brute force), use `click.ValidateOrdered`.
-
-| Params       | Desc                  |
-|--------------|-----------------------|
-| srcX         | User X-axis           |
-| srcY         | User Y-axis           |
-| X            | X-axis                |
-| Y            | Y-axis                |
-| width        | Width                 |
-| height       | Height                |
-| paddingValue | Set the padding value |
-
-<br/>
-
-### Notes
-
-- The character set (`chars`) or graphic set (`shapes`) must be longer than `rangeLen.Max`, otherwise `CharRangeLenErr` or `ShapesRangeLenErr` will be triggered.
-- Graphic mode requires valid image resources (`shapeMaps`), otherwise `ShapesTypeErr` will be triggered.
-- Background images must not be empty, otherwise `EmptyBackgroundImageErr` will be triggered.
-
-<br />
-
 
 ## 🖖 Slide Or Drag-Drop CAPTCHA
 
@@ -773,8 +559,7 @@ Bot resistance depends on how you wire the library into your app. The essentials
 1. **Never return `GetData()` to clients** — use `GetPublicData()` in API responses, and hand the answer to `antibot.Issue` (encrypted at rest) or seal it with `challenge.Seal` (AEAD).
 2. **Expire and single-use challenges** — short TTLs, delete after first successful verify.
 3. **Cap attempts and rate-limit** — the [`antibot`](v2/antibot) layer does both out of the box.
-4. **Prefer ordered click validation** — `click.ValidateOrdered` over unordered checks.
-5. **Use diverse assets** — many backgrounds/graphics make solver training harder.
+4. **Use diverse assets** — many backgrounds/graphics make solver training harder.
 
 Full details and the rationale behind every hardening change live in [SECURITY.md](SECURITY.md).
 

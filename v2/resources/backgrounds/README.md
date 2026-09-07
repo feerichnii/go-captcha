@@ -22,5 +22,5 @@ All images are `720x540` RGB PNG. The library randomly crops a master-sized regi
 
 ```go
 bg, _ := codec.DecodeByteToPng(mustRead("bg_mosaic.png"))
-builder.SetResources(click.WithBackgrounds([]image.Image{bg}))
+builder.SetResources(slide.WithBackgrounds([]image.Image{bg}))
 ```

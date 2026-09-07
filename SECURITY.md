@@ -1,12 +1,11 @@
 # Security hardening notes
 
-GoCaptcha generates interactive CAPTCHA images. Bot resistance depends on (1) never leaking answers to clients and (2) challenge lifecycle controls. This fork ships both: hardened generation in `click`/`slide`/`rotate`, and the lifecycle layer in [`v2/antibot`](v2/antibot).
+GoCaptcha generates interactive CAPTCHA images. Bot resistance depends on (1) never leaking answers to clients and (2) challenge lifecycle controls. This fork ships both: hardened generation in `slide`/`rotate`, and the lifecycle layer in [`v2/antibot`](v2/antibot).
 
 ## Critical: never return `GetData()` to clients
 
 | Mode   | Secret fields                          |
 |--------|----------------------------------------|
-| Click  | `x`, `y`, `text` / `shape`             |
 | Slide  | `x`, `y` (target drop position)        |
 | Rotate | `angle`                                |
 
@@ -30,7 +29,6 @@ If you need a stateless token instead of a store, `challenge.Seal`/`Open` produc
 ## Generation hardening
 
 - Answer geometry, characters and ordering use `crypto/rand` (`random.RandInt` / `Perm`, buffered, unbiased).
-- Click: thumb glyph deformation on by default; interference lines/speckles on the master.
 - Slide: decoy shadows (default 3); alpha jitter on tile edges.
 - Rotate: independent luminance noise fields on master and thumb (they do not align under any rotation, so plain correlation solvers need to average it out).
 - JPEG defaults use quality 85 instead of 100.

@@ -58,7 +58,7 @@ func New(store Store, cfg Config, opts ...Option) (*Layer, error) {
 
 // IssueRequest creates a new challenge from a generated captcha answer.
 type IssueRequest struct {
-	Kind string // click | slide | rotate
+	Kind string // slide | rotate
 	// Answer is json of GetData() — server only; encrypted at rest.
 	Answer json.RawMessage
 	// ClientKey binds the challenge to a server-issued session id (required).
@@ -92,7 +92,7 @@ type IssueResponse struct {
 // VerifyRequest is the client solve payload.
 type VerifyRequest struct {
 	ID         string
-	Answer     json.RawMessage // ClickSubmit / SlideSubmit / RotateSubmit
+	Answer     json.RawMessage // SlideSubmit / RotateSubmit
 	Trajectory Trajectory
 	PoWNonce   string
 	ClientKey  string // must match the key used at Issue
@@ -384,7 +384,7 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	if err != nil {
 		return fail(fmt.Errorf("%w: answer decrypt: %v", ErrStore, err))
 	}
-	tol := Tolerance{Click: l.cfg.ClickPadding, Slide: l.cfg.SlidePadding, Rotate: l.cfg.RotatePadding}
+	tol := Tolerance{Slide: l.cfg.SlidePadding, Rotate: l.cfg.RotatePadding}
 	if !l.checker(rec.Kind, plain, req.Answer, tol) {
 		dec, _ := l.EvaluateRisk(ctx, hash, RiskInputs{
 			Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,

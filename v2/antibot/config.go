@@ -46,7 +46,6 @@ type Config struct {
 	MaxAnswerBytes int
 
 	// Padding tolerances are server-side and never taken from the client.
-	ClickPadding  int // px, default 5
 	SlidePadding  int // px, default 5
 	RotatePadding int // degrees, default 5
 
@@ -140,7 +139,6 @@ func (c *Config) withDefaults() Config {
 	}
 	setInt(&out.MaxNonceLen, 64)
 	setInt(&out.MaxAnswerBytes, 4096)
-	setInt(&out.ClickPadding, 5)
 	setInt(&out.SlidePadding, 5)
 	setInt(&out.RotatePadding, 5)
 	if out.Scorer == nil {

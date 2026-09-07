@@ -33,7 +33,7 @@ const tokenVersion = "v2"
 type Payload struct {
 	// ID binds the payload to a challenge id.
 	ID string `json:"id,omitempty"`
-	// Kind is click | slide | rotate
+	// Kind is slide | rotate
 	Kind string `json:"kind"`
 	// Data is a JSON encoding of the captcha answer (GetData()).
 	Data json.RawMessage `json:"data"`
@@ -179,7 +179,7 @@ func ClampPadding(padding, max int) int {
 	return padding
 }
 
-// ParseInt is a tiny helper for apps parsing click coords from forms.
+// ParseInt is a tiny helper for apps parsing captcha coords from forms.
 func ParseInt(s string) (int, error) {
 	v, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {

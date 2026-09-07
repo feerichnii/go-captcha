@@ -11,7 +11,7 @@
 
 > [English](README.md) | 中文 
 <p align="center">
-<b>GoCaptcha · AntiBot 加固版</b> 是一个功能强大、模块化且高度可定制的 Golang 行为式验证码库。它提供全部四种交互式验证码类型（<b>点选</b>、<b>滑动</b>、<b>拖拽</b> 和 <b>旋转</b>），并在其之上叠加了完整的 <b>AntiBot（反自动化）</b> 能力：答案仅保留在服务端、加密随机数、图像干扰、AEAD 加密挑战、行为轨迹评分、限流以及自适应工作量证明（PoW）。
+<b>GoCaptcha · AntiBot 加固版</b> 是一个功能强大、模块化且高度可定制的 Golang 行为式验证码库。它提供三种交互式验证码类型（<b>滑动</b>、<b>拖拽</b> 和 <b>旋转</b>），并在其之上叠加了完整的 <b>AntiBot（反自动化）</b> 能力：答案仅保留在服务端、加密随机数、图像干扰、AEAD 加密挑战、行为轨迹评分、限流以及自适应工作量证明（PoW）。
 </p>
 
 <p align="center"> ⭐️ 如果能帮助到你，请随手给个 star</p>
@@ -31,7 +31,7 @@
 本加固版在不改变原有 API 使用习惯的前提下，让验证码更难被自动化程序破解。相较上游 GoCaptcha，新增三大能力：
 
 - **默认更安全的答案处理** —— `GetPublicData()` 只返回浏览器所需、且不含答案的元数据；真实答案（`GetData()`）无需离开服务端，也可通过 [`v2/base/challenge`](v2) 由 `antibot` 层以 AES-256-GCM 加密存储，或密封为不透明的 AEAD 令牌。
-- **抗破解的图像与随机数加固** —— 答案坐标改用 `crypto/rand` 生成，JPEG 主图叠加干扰噪点，滑块加入诱饵阴影与边缘抖动，旋转主图加入圆环噪点，点选缩略图默认形变。详见 [SECURITY.md](SECURITY.md)。
+- **抗破解的图像与随机数加固** —— 答案坐标改用 `crypto/rand` 生成，JPEG 主图叠加干扰噪点，滑块加入诱饵阴影与边缘抖动，旋转主图加入圆环噪点。详见 [SECURITY.md](SECURITY.md)。
 - **`antibot` 编排层** —— 开箱即用的编排包（[`v2/antibot`](v2/antibot)），负责挑战生命周期（加密 ID、TTL、单次使用、尝试次数上限）、指针轨迹评分、按客户端限流，并对可疑客户端下发自适应 PoW。支持内存或 Redis 存储。
 - **内置高复杂度背景图** —— 在 [`v2/resources/backgrounds`](v2/resources/backgrounds) 内置了一组高熵、细节密集的全新背景图，让主图默认就更难被 OCR/轮廓类自动化程序分割识别。
 
@@ -63,7 +63,7 @@
 
 ## 核心特性
 
-- **多样化验证码类型**：支持点选、滑动、旋转和拖拽四种行为式验证码，适应不同交互场景。
+- **多样化验证码类型**：支持滑动、旋转和拖拽三种行为式验证码，适应不同交互场景。
 - **默认抗自动化**：答案使用加密随机数生成、图像干扰/诱饵，并对公开数据与秘密答案做拆分，答案永不下发到浏览器。
 - **完整 AntiBot 编排**：挑战生命周期、轨迹评分、限流与自适应 PoW，统一封装在 [`antibot`](v2/antibot) 包中。
 - **高度可定制化**：通过选项（`Options`）和资源（`Resources`）支持图像、字体、颜色、角度、大小等灵活配置。
@@ -76,11 +76,10 @@
 
 ## 验证码类型
 
-`go-captcha` 支持以下四种验证码类型，每种类型具有独特的交互方式、生成逻辑和应用场景：
-1. **点选验证码（Click）**：用户在主图像中点击指定的点或字符，支持文本模式和图形模式。
-2. **滑动验证码（Slide）**：用户将拼图块滑动到主图像中的正确位置，支持基本模式和拖拽模式。
-3. **拖拽验证码（DragDrop）**：滑动验证码的变体，允许用户在更大范围内拖动拼图块到目标位置。
-4. **旋转验证码（Rotate）**：用户旋转缩略图使其与主图像的角度对齐。
+`go-captcha` 支持以下三种验证码类型，每种类型具有独特的交互方式、生成逻辑和应用场景：
+1. **滑动验证码（Slide）**：用户将拼图块滑动到主图像中的正确位置，支持基本模式和拖拽模式。
+2. **拖拽验证码（DragDrop）**：滑动验证码的变体，允许用户在更大范围内拖动拼图块到目标位置。
+3. **旋转验证码（Rotate）**：用户旋转缩略图使其与主图像的角度对齐。
 
 <br/>
 
@@ -115,209 +114,12 @@ $ go get -u github.com/feerichnii/go-captcha/v2@latest
 package main
 
 // 按需求引入对应的模块
-import "github.com/feerichnii/go-captcha/v2/${click|slide|rotate}"
+import "github.com/feerichnii/go-captcha/v2/${slide|rotate}"
 
 func main(){
    // ....
 }
 ```
-
-<br />
-
-## 🖖 点选验证码（Click）
-
-点选验证码要求用户在主图像中点击指定的点或字符，适合需要快速验证的场景。支持两种模式：
-
-- **文本模式**：显示字符（如字母、数字或中文），用户点击对应字符。
-- **图形模式**：显示图形（如图标或形状），用户点击对应图形。
-
-### 工作原理
-
-1. **生成主图像**（`masterImage`）：包含随机分布的点或字符，通常为 JPEG 格式。
-2. **生成缩略图**（`thumbImage`）：显示需要点击的目标点或字符，通常为 PNG 格式。
-3. **用户交互**：用户点击主图像中的坐标，前端捕获坐标并发送到后端。
-4. **验证逻辑**：后端比较用户点击的坐标与目标点（`dots`）的坐标是否匹配。
-
-### 代码示例
-```go
-package main
-
-import (
-	"encoding/json"
-	"fmt"
-	"image"
-	"log"
-	"io/ioutil"
-
-	"github.com/golang/freetype"
-	"github.com/golang/freetype/truetype"
-	"github.com/feerichnii/go-captcha/v2/base/option"
-	"github.com/feerichnii/go-captcha/v2/click"
-	"github.com/feerichnii/go-captcha/v2/base/codec"
-)
-
-var textCapt click.Captcha
-
-func init() {
-	builder := click.NewBuilder(
-		click.WithRangeLen(option.RangeVal{Min: 4, Max: 6}),
-		click.WithRangeVerifyLen(option.RangeVal{Min: 2, Max: 4}),
-        // ...
-	)
-
-	// 可以使用预置的素材资源：https://github.com/wenlng/go-captcha-assets
-	fontN, err := loadFont("../resources/fzshengsksjw_cu.ttf")
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	bgImage, err := loadPng("../resources/bg.png")
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	builder.SetResources(
-		click.WithChars([]string{"这", "是", "随", "机", "的", "文", "本", "种", "子", "呀"}),
-		click.WithFonts([]*truetype.Font{
-			fontN,
-		}),
-		click.WithBackgrounds([]image.Image{
-			bgImage,
-		}),
-	)
-
-	textCapt = builder.Make()
-}
-
-func loadPng(p string) (image.Image, error) {
-	imgBytes, err := ioutil.ReadFile(p)
-	if err != nil {
-		return nil, err
-	}
-	return codec.DecodeByteToPng(imgBytes)
-}
-
-func loadFont(p string) (*truetype.Font, error) {
-	fontBytes, err := ioutil.ReadFile(p)
-	if err != nil {
-		panic(err)
-	}
-	return freetype.ParseFont(fontBytes)
-}
-
-
-func main() {
-	captData, err := textCapt.Generate()
-	if err != nil {
-		log.Fatalln(err)
-	}
-
-	dotData := captData.GetData()
-	if dotData == nil {
-		log.Fatalln(">>>>> generate err")
-	}
-
-	dots, _ := json.Marshal(dotData)
-	fmt.Println(">>>>> ", string(dots))
-
-	var mBase64, tBase64 string
-	mBase64, err = captData.GetMasterImage().ToBase64()
-	if err != nil {
-		fmt.Println(err)
-	}
-	tBase64, err = captData.GetThumbImage().ToBase64()
-	if err != nil {
-		fmt.Println(err)
-	}
-
-	fmt.Println(">>>>> ", mBase64)
-	fmt.Println(">>>>> ", tBase64)
-	
-	//err = captData.GetMasterImage().SaveToFile("../resources/master.jpg", option.QualityNone)
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-	//err = captData.GetThumbImage().SaveToFile("../resources/thumb.png")
-	//if err != nil {
-	//	fmt.Println(err)
-	//}
-}
-```
-
-### 创建实例
-- builder.Make()  中文文本、字母数字混合点选
-- builder.MakeShape()  图形点选
-
-### 配置选项
-> click.NewBuilder(click.WithXxx(), ...) 或 builder.SetOptions(click.WithXxx(), ...)
-
-| Options                                    | Desc                                                  |
-|--------------------------------------------|-------------------------------------------------------|
-| 主图                                         |
-| click.WithImageSize(option.Size)           | 设置主图尺寸，默认 300x220                                     |
-| click.WithRangeLen(option.RangeVal)        | 设置随机内容长度范围                                            |
-| click.WithRangeAnglePos([]option.RangeVal) | 设置随机角度范围                                              |
-| click.WithRangeSize(option.RangeVal)       | 设置随机内容大小范围                                            |
-| click.WithRangeColors([]string)            | 设置随机颜色                                                |
-| click.WithDisplayShadow(bool)              | 设置是否显示阴影                                              |
-| click.WithShadowColor(string)              | 设置阴影颜色                                                |
-| click.WithShadowPoint(option.Point)        | 设置阴影偏移位置                                              |
-| click.WithImageAlpha(float32)              | 设置主图透明度                                               |
-| click.WithUseShapeOriginalColor(bool)      | 设置是否使用图形原始颜色，"图形点选"有效                                 |
-| 缩略图                                        |
-| click.WithThumbImageSize(option.Size)      | 设置缩略尺寸，默认 150x40                                      |
-| click.WithRangeVerifyLen(option.RangeVal)  | 设置校验内容的随机长度范围                                         |
-| click.WithDisabledRangeVerifyLen(bool)     | 禁用校验内容的随机长度，与主图内容的长度保持一致                              |
-| click.WithRangeThumbSize(option.RangeVal)  | 设置随机缩略内容随机大小范围                                        |
-| click.WithRangeThumbColors([]string)       | 设置缩略随机颜色范围                                            |
-| click.WithRangeThumbBgColors([]string)     | 设置缩略随机背景颜色范围                                          |
-| click.WithIsThumbNonDeformAbility(bool)    | 设置缩略图内容不变形，不受背景影响                                     |
-| click.WithThumbBgDistort(int)              | 设置缩略图背景扭曲 option.DistortLevel1 至 option.DistortLevel5 |
-| click.WithThumbBgCirclesNum(int)           | 设置缩略图绘制小圆点数量                                          |
-| click.WithThumbBgSlimLineNum(int)          | 设置缩略图绘制线条数量                                           |
-
-
-### 设置资源
-> builder.SetResources(click.WithXxx(), ...)
-
-| Options                                   | Desc      |
-|-------------------------------------------|-----------|
-| click.WithChars([]string)                 | 设置文本种子    |
-| click.WithShapes(map[string]image.Image)  | 设置图形种子    |
-| click.WithFonts([]*truetype.Font)         | 设置字体      |
-| click.WithBackgrounds([]image.Image)      | 设置主图背景    |
-| click.WithThumbBackgrounds([]image.Image) | 设置缩略图背景   |
-
-
-### 验证码数据
-> captData, err := capt.Generate()
-
-| Method                                   | Desc      |
-|------------------------------------------|-----------|
-| GetData() map[int]*Dot                   | 获取当前校验的信息 |
-| GetMasterImage() imagedata.JPEGImageData | 获取主图      |
-| GetThumbImage() imagedata.PNGImageData   | 获取缩略图     |
-
-### 验证码校验
-> ok := click.Validate(srcX, srcY, X, Y, width, height, paddingValue)
-
-| Params       | Desc               |
-|--------------|--------------------|
-| srcX         | 用户交互的 X 值          |
-| srcY         | 用户交互的 Y 值          |
-| X            | 验证码校验的 X 值         |
-| Y            | 验证码校验的 Y 值         |
-| width        | 验证码校验的 Width 值     |
-| height       | 验证码校验的 Height 值    |
-| paddingValue | 控制误差值              |
-
-<br/>
-
-### 注意事项
-
-- 字符集（`chars`）或图形集（`shapes`）的长度必须大于 `rangeLen.Max`，否则会触发 `CharRangeLenErr` 或 `ShapesRangeLenErr`。
-- 图形模式需要提供有效的图像资源（`shapeMaps`），否则会触发 `ShapesTypeErr`。
-- 背景图像不能为空，否则会触发 `EmptyBackgroundImageErr`。
 
 <br />
 
@@ -752,8 +554,6 @@ res, err := layer.Verify(ctx, antibot.VerifyRequest{
 <br/>
 
 ## 验证模块
-- [x] 文字点选
-- [x] 图形点选
 - [x] 滑动
 - [x] 拖拽
 - [x] 旋转

@@ -25,7 +25,7 @@ type Store interface {
 // Answer is AEAD-encrypted with Config.SecretKey and bound to ID.
 type ChallengeRecord struct {
 	ID          string `json:"id"`
-	Kind        string `json:"kind"` // click | slide | rotate
+	Kind        string `json:"kind"` // slide | rotate
 	Answer      []byte `json:"answer"`
 	PoWDiff     int    `json:"pow_diff,omitempty"`
 	PoWSalt     string `json:"pow_salt,omitempty"`

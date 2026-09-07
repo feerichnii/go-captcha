@@ -28,7 +28,7 @@ func TestSealOpenRoundTrip(t *testing.T) {
 }
 
 func TestOpenRejectsWrongKey(t *testing.T) {
-	tok, err := Seal(testKey, Payload{Kind: "click", Data: json.RawMessage(`{}`)})
+	tok, err := Seal(testKey, Payload{Kind: "slide", Data: json.RawMessage(`{}`)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,14 +38,14 @@ func TestOpenRejectsWrongKey(t *testing.T) {
 }
 
 func TestOpenRejectsWrongID(t *testing.T) {
-	tok, _ := Seal(testKey, Payload{ID: "one", Kind: "click", Data: json.RawMessage(`{}`)})
+	tok, _ := Seal(testKey, Payload{ID: "one", Kind: "slide", Data: json.RawMessage(`{}`)})
 	if _, err := Open(testKey, tok, "two"); err != ErrBadMAC {
 		t.Fatalf("want ErrBadMAC on id mismatch, got %v", err)
 	}
 }
 
 func TestOpenRejectsTampered(t *testing.T) {
-	tok, _ := Seal(testKey, Payload{Kind: "click", Data: json.RawMessage(`{}`)})
+	tok, _ := Seal(testKey, Payload{Kind: "slide", Data: json.RawMessage(`{}`)})
 	b := []byte(tok)
 	b[len(b)-1] ^= 0x01
 	if _, err := Open(testKey, string(b), ""); err == nil {
@@ -82,7 +82,7 @@ func TestNewID(t *testing.T) {
 }
 
 func FuzzOpen(f *testing.F) {
-	tok, _ := Seal(testKey, Payload{ID: "id", Kind: "click", Data: json.RawMessage(`{}`)})
+	tok, _ := Seal(testKey, Payload{ID: "id", Kind: "slide", Data: json.RawMessage(`{}`)})
 	f.Add(tok)
 	f.Add("v2.")
 	f.Add("garbage")

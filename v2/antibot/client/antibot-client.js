@@ -446,7 +446,7 @@ export class AntiBotClient {
   /**
    * Submit the answer with trajectory, browser signals and PoW nonce.
    * @param {object} ch          object returned by issue()
-   * @param {object} answer      antibot.ClickSubmit | SlideSubmit | RotateSubmit shape
+   * @param {object} answer      antibot.SlideSubmit | RotateSubmit shape
    * @param {{points:any[],events:string[],coalesced_total?:number}} trajectory
    */
   async verify(ch, answer, trajectory) {

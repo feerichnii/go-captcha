@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feerichnii/go-captcha/v2/click"
 	"github.com/feerichnii/go-captcha/v2/slide"
 )
 
@@ -493,17 +492,6 @@ func TestTelemetryEmitted(t *testing.T) {
 	defer mu.Unlock()
 	if len(events) != 1 || events[0].Outcome != "bad_answer" || events[0].Score == 0 {
 		t.Fatalf("%+v", events)
-	}
-}
-
-func TestCheckClickServerPadding(t *testing.T) {
-	dots := map[int]*click.Dot{0: {Index: 0, X: 10, Y: 10, Width: 20, Height: 20}}
-	stored := mustJSON(dots)
-	if !CheckClick(stored, mustJSON(ClickSubmit{Points: []click.Point{{X: 15, Y: 15}}}), 2) {
-		t.Fatal("expected click match")
-	}
-	if CheckClick(stored, mustJSON(ClickSubmit{Points: []click.Point{{X: 90, Y: 90}}}), 2) {
-		t.Fatal("far click must fail")
 	}
 }
 
