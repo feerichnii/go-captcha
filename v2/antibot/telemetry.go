@@ -1,5 +1,7 @@
 package antibot
 
+import "errors"
+
 // Telemetry receives structured events for logging, metrics and score calibration.
 // Implementations must be safe for concurrent use and must not block.
 type Telemetry interface {
@@ -62,32 +64,37 @@ func (t TelemetryFunc) OnVerify(e VerifyEvent) {
 }
 
 func outcomeName(err error) string {
-	switch err {
-	case nil:
+	if err == nil {
 		return "ok"
-	case ErrNotFound:
+	}
+	switch {
+	case errors.Is(err, ErrNotFound):
 		return "not_found"
-	case ErrMaxAttempts:
+	case errors.Is(err, ErrMaxAttempts):
 		return "max_attempts"
-	case ErrRateLimited:
+	case errors.Is(err, ErrLocked):
+		return "locked"
+	case errors.Is(err, ErrRateLimited):
 		return "rate_limited"
-	case ErrBadAnswer:
+	case errors.Is(err, ErrBadAnswer):
 		return "bad_answer"
-	case ErrLowScore:
+	case errors.Is(err, ErrLowScore):
 		return "low_score"
-	case ErrPoWInvalid:
+	case errors.Is(err, ErrPoWInvalid):
 		return "pow_invalid"
-	case ErrTooFast:
+	case errors.Is(err, ErrTooFast):
 		return "too_fast"
-	case ErrInvalidRequest:
+	case errors.Is(err, ErrInvalidRequest):
 		return "invalid_request"
-	case ErrJSChallengeFailed:
+	case errors.Is(err, ErrJSChallengeFailed):
 		return "js_challenge_failed"
-	case ErrBrowserRequired:
+	case errors.Is(err, ErrBrowserRequired):
 		return "browser_required"
-	case ErrPiecePressRequired:
+	case errors.Is(err, ErrPiecePressRequired):
 		return "piece_press_required"
+	case errors.Is(err, ErrMissingClientIP):
+		return "missing_client_ip"
 	default:
-		return "internal"
+		return "error"
 	}
 }

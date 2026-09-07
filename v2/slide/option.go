@@ -54,7 +54,7 @@ func (o *Options) GetRangeGraphSize() *option.RangeVal {
 	}
 }
 
-// GetGenGraphNumber returns how many drop slots are drawn (default 3).
+// GetGenGraphNumber returns the configured slot count (0 = auto random 4–7).
 func (o *Options) GetGenGraphNumber() int {
 	return o.genGraphNumber
 }
@@ -108,13 +108,13 @@ func WithRangeGraphAnglePos(vals []option.RangeVal) Option {
 }
 
 // WithGenGraphNumber sets how many drop slots (notches) are drawn on the master
-// image. Default is 3: identical silhouette at each notch, one correct position.
+// image. Values < 1 mean auto (random 4–7). Default is auto.
 // Only the secret target from GetData() is valid; decoy coordinates are never
 // exposed via GetPublicData().
 func WithGenGraphNumber(val int) Option {
 	return func(opts *Options) {
 		if val < 1 {
-			val = 1
+			val = 0
 		}
 		opts.genGraphNumber = val
 	}

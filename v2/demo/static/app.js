@@ -87,8 +87,17 @@ function dataURL(b64) {
   return `data:${isPng ? "image/png" : "image/jpeg"};base64,${b64}`;
 }
 
+async function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
 async function issueCard(card) {
   const kind = card.dataset.kind;
+  if (card._lockedUntil && Date.now() < card._lockedUntil) {
+    const left = Math.max(0, card._lockedUntil - Date.now());
+    setStatus(card, `заблокировано, подождите ${Math.ceil(left / 1000)}с`, false);
+    return;
+  }
   setStatus(card, "загрузка…");
   $(".refresh", card).disabled = true;
   try {
@@ -98,7 +107,13 @@ async function issueCard(card) {
     renderChallenge(card, ch);
     setStatus(card, "");
   } catch (e) {
-    setStatus(card, String(e.message || e), false);
+    const retry = Number(e.retry_after_ms || e.data?.retry_after_ms || 0);
+    if (retry > 0) {
+      card._lockedUntil = Date.now() + retry;
+      setStatus(card, `заблокировано (${Math.ceil(retry / 1000)}с)`, false);
+    } else {
+      setStatus(card, String(e.message || e), false);
+    }
   } finally {
     $(".refresh", card).disabled = false;
   }
@@ -238,6 +253,8 @@ async function verifyCard(card) {
     setStatus(card, "сначала обновите капчу", false);
     return;
   }
+  // One-shot: never reuse the same challenge id after a geometry attempt.
+  card._ch = null;
   const kind = card.dataset.kind;
   $(".verify", card).disabled = true;
   setStatus(card, "проверка…");
@@ -268,10 +285,34 @@ async function verifyCard(card) {
       setStatus(card, "успех", true);
       setTimeout(() => issueCard(card), 700);
     } else {
-      setStatus(card, `ошибка (${res.status})`, false);
+      const retry = Number(res.data?.retry_after_ms || 0);
+      const errName = res.data?.error || "";
+      if (retry > 0) {
+        card._lockedUntil = Date.now() + retry;
+        setStatus(card, `${errName || "ошибка"} — пауза ${Math.ceil(retry / 1000)}с`, false);
+        if (errName === "locked") {
+          // Do not Issue until cooldown ends.
+          setTimeout(() => issueCard(card), retry + 50);
+        } else {
+          // Bad answer: wait retry_after then Issue a new challenge.
+          await sleep(retry);
+          await issueCard(card);
+        }
+      } else {
+        setStatus(card, `ошибка (${res.status})`, false);
+        setTimeout(() => issueCard(card), 900);
+      }
     }
   } catch (e) {
-    setStatus(card, String(e.message || e), false);
+    const retry = Number(e.retry_after_ms || e.data?.retry_after_ms || 0);
+    if (retry > 0) {
+      card._lockedUntil = Date.now() + retry;
+      setStatus(card, String(e.message || e), false);
+      setTimeout(() => issueCard(card), retry + 50);
+    } else {
+      setStatus(card, String(e.message || e), false);
+      setTimeout(() => issueCard(card), 900);
+    }
   } finally {
     $(".verify", card).disabled = false;
   }

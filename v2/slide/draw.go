@@ -21,6 +21,9 @@ type DrawImageParams struct {
 	Background        image.Image
 	Alpha             float32
 	CaptchaDrawBlocks []*DrawBlock
+	// BackgroundPreCropped skips textured re-crop when Background is already
+	// sized to Width×Height (used by similarity slot placement).
+	BackgroundPreCropped bool
 }
 
 // DrawTplImageParams defines the parameters for drawing the template image (tile)
@@ -111,13 +114,19 @@ func (d *drawImage) DrawWithNRGBA(params *DrawImageParams) (img image.Image, bgI
 	var rcm = canvas.CreateNRGBACanvas(params.Width, params.Height, true)
 	if params.Background != nil {
 		bgImage := params.Background
-		b := bgImage.Bounds()
-		m := canvas.CreateNRGBACanvas(b.Dx(), b.Dy(), true)
-		// Prefer textured crops so drop slots land on readable landmarks,
-		// not flat sky/water where the tile and notches look identical.
-		point := randgen.RangCutImagePosTextured(params.Width, params.Height, bgImage, 16)
-		draw.Draw(m.Get(), b, bgImage, point, draw.Src)
-		m.SubImage(image.Rect(0, 0, params.Width, params.Height))
+		m := canvas.CreateNRGBACanvas(params.Width, params.Height, true)
+		if params.BackgroundPreCropped {
+			draw.Draw(m.Get(), m.Bounds(), bgImage, bgImage.Bounds().Min, draw.Src)
+		} else {
+			b := bgImage.Bounds()
+			tmp := canvas.CreateNRGBACanvas(b.Dx(), b.Dy(), true)
+			// Prefer textured crops so drop slots land on readable landmarks,
+			// not flat sky/water where the tile and notches look identical.
+			point := randgen.RangCutImagePosTextured(params.Width, params.Height, bgImage, 16)
+			draw.Draw(tmp.Get(), b, bgImage, point, draw.Src)
+			tmp.SubImage(image.Rect(0, 0, params.Width, params.Height))
+			draw.Draw(m.Get(), m.Bounds(), tmp.Get(), image.Point{}, draw.Src)
+		}
 
 		draw.Draw(rcm.Get(), rcm.Bounds(), m.Get(), image.Point{}, draw.Over)
 		draw.Draw(m.Get(), cvs.Bounds(), cvs, image.Point{}, draw.Over)

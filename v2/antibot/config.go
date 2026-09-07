@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"math"
+	"net/netip"
 	"time"
 )
 
@@ -23,8 +24,27 @@ type Config struct {
 
 	// TTL for challenges (default 90s).
 	TTL time.Duration
-	// MaxAttempts per challenge, counted atomically (default 3).
+	// Deprecated: ignored for slide/rotate (one visual challenge = one geometry attempt).
 	MaxAttempts int
+
+	// TrustedProxies may forward X-Real-IP / X-Forwarded-For; others use RemoteAddr only.
+	TrustedProxies []netip.Prefix
+
+	// GlobalIssueRateMax / GlobalVerifyRateMax emergency hard limits (default 10000 / 20000).
+	GlobalIssueRateMax  int
+	GlobalVerifyRateMax int
+
+	// SoftPrefixIssueSoft triggers +1 risk when /24 issue rate exceeds this (default 120).
+	SoftPrefixIssueSoft int
+
+	// ASNProvider maps IP → ASN for soft risk (nil = unknown).
+	ASNProvider ASNProvider
+
+	// GeoLockTTL protective TTL for in-flight geo:<ip> (default 30s).
+	GeoLockTTL time.Duration
+
+	// DisableSessionWarmup skips new-session +1 risk (tests).
+	DisableSessionWarmup bool
 
 	// IssueRateMax challenges per RateWindow per client key (default 30).
 	IssueRateMax int
@@ -127,9 +147,16 @@ func (c *Config) withDefaults() Config {
 		}
 	}
 	setDur(&out.TTL, 90*time.Second)
-	setInt(&out.MaxAttempts, 3)
+	// MaxAttempts retained for telemetry compatibility only.
+	if out.MaxAttempts <= 0 {
+		out.MaxAttempts = 1
+	}
 	setInt(&out.IssueRateMax, 30)
 	setInt(&out.VerifyRateMax, 60)
+	setInt(&out.GlobalIssueRateMax, 10000)
+	setInt(&out.GlobalVerifyRateMax, 20000)
+	setInt(&out.SoftPrefixIssueSoft, 120)
+	setDur(&out.GeoLockTTL, 30*time.Second)
 	setDur(&out.RateWindow, time.Minute)
 	setDur(&out.MinSolveTime, 300*time.Millisecond)
 	setInt(&out.MaxTrajectoryPoints, 2000)

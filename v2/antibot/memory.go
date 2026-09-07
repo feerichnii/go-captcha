@@ -2,6 +2,8 @@ package antibot
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -27,6 +29,8 @@ type MemoryStore struct {
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{data: make(map[string]*memItem)}
 }
+
+var _ GeometryStore = (*MemoryStore)(nil)
 
 func (m *MemoryStore) sweepLocked(now time.Time) {
 	m.ops++
@@ -119,4 +123,71 @@ func (m *MemoryStore) IncrBy(_ context.Context, key string, delta int64, ttl tim
 		it.counter = 0
 	}
 	return it.counter, nil
+}
+
+// ClaimGeometryAtomic implements GeometryStore.
+func (m *MemoryStore) ClaimGeometryAtomic(_ context.Context, args ClaimGeometryArgs) (*ChallengeRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.sweepLocked(now)
+
+	if fr, ok := m.getLocked(args.FreezeKey, now); ok {
+		untilMs, _ := strconv.ParseInt(string(fr.value), 10, 64)
+		retry := untilMs - args.NowMs
+		if retry < 0 {
+			retry = 0
+		}
+		return nil, &LockedError{RetryAfterMs: retry}
+	}
+	if _, ok := m.getLocked(args.GeoKey, now); ok {
+		return nil, &LockedError{RetryAfterMs: geoLockTTL.Milliseconds()}
+	}
+	it, ok := m.getLocked(args.ChallengeKey, now)
+	if !ok {
+		return nil, ErrNotFound
+	}
+	rec, err := decodeRecord(it.value)
+	if err != nil {
+		return nil, fmt.Errorf("%w: corrupt record", ErrStore)
+	}
+	if rec.ClientHash != args.ExpectClient || rec.IPHash != args.ExpectIP {
+		return nil, ErrNotFound
+	}
+	tok := append([]byte(nil), []byte(args.ClaimToken)...)
+	geo := &memItem{value: tok}
+	if args.GeoTTL > 0 {
+		geo.expiresAt = now.Add(args.GeoTTL)
+	}
+	m.data[args.GeoKey] = geo
+	delete(m.data, args.ChallengeKey)
+	return rec, nil
+}
+
+func (m *MemoryStore) ReleaseGeoLock(_ context.Context, geoKey, claimToken string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	it, ok := m.getLocked(geoKey, now)
+	if !ok {
+		return nil
+	}
+	if string(it.value) != claimToken {
+		return nil
+	}
+	delete(m.data, geoKey)
+	return nil
+}
+
+func (m *MemoryStore) SetFreeze(_ context.Context, freezeKey string, untilMs int64, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	m.sweepLocked(now)
+	it := &memItem{value: []byte(strconv.FormatInt(untilMs, 10))}
+	if ttl > 0 {
+		it.expiresAt = now.Add(ttl)
+	}
+	m.data[freezeKey] = it
+	return nil
 }

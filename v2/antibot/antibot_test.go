@@ -48,6 +48,7 @@ func newLayer(t *testing.T, cfg Config) (*Layer, *fakeClock) {
 	// covered by dedicated tests that call New() without these opt-outs.
 	cfg.AllowNonBrowser = true
 	cfg.AllowMissingPiecePress = true
+	cfg.DisableSessionWarmup = true
 	l, err := New(NewMemoryStore(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +98,16 @@ func mustJSON(v interface{}) json.RawMessage {
 	return b
 }
 
+const testClientIP = "203.0.113.10"
+
+func testSig(ip string) ClientSignals {
+	if ip == "" {
+		ip = testClientIP
+	}
+	return ClientSignals{IP: ip, UserAgent: "Mozilla/5.0 Test"}
+}
+
+
 // issueSlide issues and advances the clock by a plausible human solve time (2s).
 func issueSlide(t *testing.T, l *Layer, clk *fakeClock, client string) *IssueResponse {
 	t.Helper()
@@ -104,12 +115,33 @@ func issueSlide(t *testing.T, l *Layer, clk *fakeClock, client string) *IssueRes
 		Kind:      KindSlide,
 		Answer:    mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
 		ClientKey: client,
+		Signals:   testSig(""),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	clk.advance(2 * time.Second)
 	return iss
+}
+
+func powNonce(t *testing.T, iss *IssueResponse) string {
+	t.Helper()
+	if iss.PoW == nil || iss.PoW.Difficulty <= 0 {
+		return ""
+	}
+	n, err := SolvePoW(iss.PoW.Salt, iss.PoW.Difficulty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func verifyOK(t *testing.T, l *Layer, iss *IssueResponse, client string, answer json.RawMessage, traj Trajectory) (*VerifyResult, error) {
+	t.Helper()
+	return l.Verify(context.Background(), VerifyRequest{
+		ID: iss.ID, Answer: answer, Trajectory: traj, ClientKey: client,
+		Signals: testSig(""), PoWNonce: powNonce(t, iss),
+	})
 }
 
 func TestNewRequiresSecret(t *testing.T) {
@@ -238,14 +270,14 @@ func TestIssueAndVerifySlide(t *testing.T) {
 	l, clk := newLayer(t, Config{})
 	iss := issueSlide(t, l, clk, "ip-1")
 	good := mustJSON(SlideSubmit{X: 122, Y: 81})
-	res, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: good, Trajectory: humanTrajectory(), ClientKey: "ip-1"})
+	res, err := verifyOK(t, l, iss, "ip-1", good, humanTrajectory())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if res.Score <= 0 || res.Risk < 0 {
 		t.Fatalf("%+v", res)
 	}
-	_, err = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: good, Trajectory: humanTrajectory(), ClientKey: "ip-1"})
+	_, err = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: good, Trajectory: humanTrajectory(), ClientKey: "ip-1", Signals: testSig("")})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound after consume, got %v", err)
 	}
@@ -253,8 +285,9 @@ func TestIssueAndVerifySlide(t *testing.T) {
 
 func TestAnswerEncryptedAtRest(t *testing.T) {
 	store := NewMemoryStore()
-	l, _ := New(store, Config{SecretKey: testKey})
-	iss, _ := l.Issue(context.Background(), IssueRequest{Kind: KindSlide, Answer: mustJSON(slide.Block{X: 4242, Y: 1}), ClientKey: "c"})
+	l, _ := New(store, Config{SecretKey: testKey, AllowNonBrowser: true, AllowMissingPiecePress: true, PoWProbeProb: -1, PoWJitterBits: -1})
+	iss, err := l.Issue(context.Background(), IssueRequest{Kind: KindSlide, Answer: mustJSON(slide.Block{X: 4242, Y: 1}), ClientKey: "c", Signals: testSig("")})
+	if err != nil { t.Fatal(err) }
 	raw, _ := store.Get(context.Background(), l.challengeKey(iss.ID))
 	if json.Valid(raw) {
 		var rec ChallengeRecord
@@ -288,46 +321,41 @@ outer:
 func TestClientBinding(t *testing.T) {
 	l, clk := newLayer(t, Config{})
 	iss := issueSlide(t, l, clk, "session-A")
-	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), ClientKey: "session-B"})
+	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), ClientKey: "session-B", Signals: testSig(""), PoWNonce: powNonce(t, iss)})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound for foreign client, got %v", err)
 	}
-	if _, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), ClientKey: "session-A"}); err != nil {
+	if _, err := verifyOK(t, l, iss, "session-A", mustJSON(SlideSubmit{X: 120, Y: 80}), humanTrajectory()); err != nil {
 		t.Fatalf("owner should still pass: %v", err)
 	}
 }
 
-func TestMaxAttemptsSequential(t *testing.T) {
-	l, clk := newLayer(t, Config{MaxAttempts: 3})
+func TestOneShotGeometryThenLockedOrGone(t *testing.T) {
+	l, clk := newLayer(t, Config{})
 	iss := issueSlide(t, l, clk, "c")
 	bad := mustJSON(SlideSubmit{X: 1, Y: 1})
-	var errs []error
-	for i := 0; i < 4; i++ {
-		_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: bad, Trajectory: humanTrajectory(), ClientKey: "c"})
-		errs = append(errs, err)
+	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: bad, Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
+	if !errors.Is(err, ErrBadAnswer) {
+		t.Fatalf("first bad: %v", err)
 	}
-	if !errors.Is(errs[0], ErrBadAnswer) || !errors.Is(errs[1], ErrBadAnswer) {
-		t.Fatalf("first two: %v %v", errs[0], errs[1])
-	}
-	if !errors.Is(errs[2], ErrMaxAttempts) {
-		t.Fatalf("third must hit max attempts, got %v", errs[2])
-	}
-	if !errors.Is(errs[3], ErrMaxAttempts) && !errors.Is(errs[3], ErrNotFound) {
-		t.Fatalf("fourth: %v", errs[3])
+	_, err = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: bad, Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
+	if !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrLocked) {
+		t.Fatalf("second: %v", err)
 	}
 }
 
 func TestConcurrentCorrectAnswersConsumeOnce(t *testing.T) {
-	l, clk := newLayer(t, Config{MaxAttempts: 100, VerifyRateMax: 1000})
+	l, clk := newLayer(t, Config{VerifyRateMax: 1000})
 	iss := issueSlide(t, l, clk, "c")
 	good := mustJSON(SlideSubmit{X: 120, Y: 80})
+	nonce := powNonce(t, iss)
 	var ok int64
 	var wg sync.WaitGroup
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: good, Trajectory: humanTrajectory(), ClientKey: "c"}); err == nil {
+			if _, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: good, Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig(""), PoWNonce: nonce}); err == nil {
 				atomic.AddInt64(&ok, 1)
 			}
 		}()
@@ -338,8 +366,8 @@ func TestConcurrentCorrectAnswersConsumeOnce(t *testing.T) {
 	}
 }
 
-func TestConcurrentGuessesBoundedByMaxAttempts(t *testing.T) {
-	l, clk := newLayer(t, Config{MaxAttempts: 3, VerifyRateMax: 1000})
+func TestConcurrentGeometryOneShot(t *testing.T) {
+	l, clk := newLayer(t, Config{VerifyRateMax: 1000})
 	iss := issueSlide(t, l, clk, "c")
 	var evaluated int64
 	var wg sync.WaitGroup
@@ -347,15 +375,15 @@ func TestConcurrentGuessesBoundedByMaxAttempts(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: i, Y: i}), Trajectory: humanTrajectory(), ClientKey: "c"})
+			_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: i, Y: i}), Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
 			if errors.Is(err, ErrBadAnswer) {
 				atomic.AddInt64(&evaluated, 1)
 			}
 		}(i)
 	}
 	wg.Wait()
-	if evaluated > 3 {
-		t.Fatalf("%d guesses were evaluated; limit 3", evaluated)
+	if evaluated != 1 {
+		t.Fatalf("%d guesses evaluated geometry; want 1", evaluated)
 	}
 }
 
@@ -363,7 +391,7 @@ func TestExpiry(t *testing.T) {
 	l, clk := newLayer(t, Config{TTL: 20 * time.Millisecond})
 	iss := issueSlide(t, l, clk, "c")
 	time.Sleep(30 * time.Millisecond) // memory store TTL uses the real clock
-	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), ClientKey: "c"})
+	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("want ErrNotFound after TTL, got %v", err)
 	}
@@ -371,22 +399,25 @@ func TestExpiry(t *testing.T) {
 
 func TestTooFast(t *testing.T) {
 	l, clk := newLayer(t, Config{MinSolveTime: time.Second})
-	iss, _ := l.Issue(context.Background(), IssueRequest{Kind: KindSlide, Answer: mustJSON(slide.Block{X: 1, Y: 1}), ClientKey: "c"})
+	iss, err := l.Issue(context.Background(), IssueRequest{Kind: KindSlide, Answer: mustJSON(slide.Block{X: 1, Y: 1}), ClientKey: "c", Signals: testSig("")})
+	if err != nil {
+		t.Fatal(err)
+	}
 	clk.advance(100 * time.Millisecond)
-	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 1, Y: 1}), Trajectory: humanTrajectory(), ClientKey: "c"})
+	_, err = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 1, Y: 1}), Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
 	if !errors.Is(err, ErrTooFast) {
 		t.Fatalf("want ErrTooFast, got %v", err)
 	}
 }
 
 func TestVerifyRateLimit(t *testing.T) {
-	l, clk := newLayer(t, Config{VerifyRateMax: 2, MaxAttempts: 10})
+	l, clk := newLayer(t, Config{VerifyRateMax: 2, MinSolveTime: time.Hour})
 	iss := issueSlide(t, l, clk, "c")
-	bad := mustJSON(SlideSubmit{X: 1, Y: 1})
+	// Too-fast tech fails do not consume the challenge but still count for rate.
 	for i := 0; i < 2; i++ {
-		_, _ = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: bad, Trajectory: humanTrajectory(), ClientKey: "c"})
+		_, _ = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 1, Y: 1}), Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
 	}
-	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: bad, Trajectory: humanTrajectory(), ClientKey: "c"})
+	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 1, Y: 1}), Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
 	if !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("want ErrRateLimited on verify, got %v", err)
 	}
@@ -397,11 +428,11 @@ func TestIssueRateLimit(t *testing.T) {
 	ans := mustJSON(slide.Block{X: 1, Y: 1})
 	ctx := context.Background()
 	for i := 0; i < 2; i++ {
-		if _, err := l.Issue(ctx, IssueRequest{Kind: KindSlide, Answer: ans, ClientKey: "rl"}); err != nil {
+		if _, err := l.Issue(ctx, IssueRequest{Kind: KindSlide, Answer: ans, ClientKey: "rl", Signals: testSig("")}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := l.Issue(ctx, IssueRequest{Kind: KindSlide, Answer: ans, ClientKey: "rl"}); !errors.Is(err, ErrRateLimited) {
+	if _, err := l.Issue(ctx, IssueRequest{Kind: KindSlide, Answer: ans, ClientKey: "rl", Signals: testSig("")}); !errors.Is(err, ErrRateLimited) {
 		t.Fatalf("want ErrRateLimited, got %v", err)
 	}
 	if _, err := l.Issue(ctx, IssueRequest{Kind: KindSlide, Answer: ans, ClientKey: ""}); !errors.Is(err, ErrInvalidRequest) {
@@ -436,7 +467,7 @@ func TestBotScoreEscalatesRiskAndPoW(t *testing.T) {
 		t.Fatal("clean client must not get PoW")
 	}
 	// Correct geometry but bot-like trajectory: passes, but raises risk.
-	res, err := l.Verify(ctx, VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: botTrajectory(), ClientKey: "bot"})
+	res, err := l.Verify(ctx, VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: botTrajectory(), ClientKey: "bot", Signals: testSig("")})
 	if err != nil {
 		t.Fatalf("score must not hard-reject by default: %v", err)
 	}
@@ -448,12 +479,12 @@ func TestBotScoreEscalatesRiskAndPoW(t *testing.T) {
 	if iss2.PoW == nil || iss2.PoW.Difficulty != 6 {
 		t.Fatalf("expected pow at level 1: %+v", iss2.PoW)
 	}
-	_, err = l.Verify(ctx, VerifyRequest{ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), PoWNonce: "nope", ClientKey: "bot"})
+	_, err = l.Verify(ctx, VerifyRequest{ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), PoWNonce: "nope", ClientKey: "bot", Signals: testSig("")})
 	if !errors.Is(err, ErrPoWInvalid) {
 		t.Fatalf("want ErrPoWInvalid, got %v", err)
 	}
 	nonce, _ := SolvePoW(iss2.PoW.Salt, iss2.PoW.Difficulty)
-	res2, err := l.Verify(ctx, VerifyRequest{ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), PoWNonce: nonce, ClientKey: "bot"})
+	res2, err := l.Verify(ctx, VerifyRequest{ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), PoWNonce: nonce, ClientKey: "bot", Signals: testSig("")})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -465,7 +496,7 @@ func TestBotScoreEscalatesRiskAndPoW(t *testing.T) {
 func TestHardRejectOptIn(t *testing.T) {
 	l, clk := newLayer(t, Config{HardRejectScore: 0.45})
 	iss := issueSlide(t, l, clk, "c")
-	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: botTrajectory(), ClientKey: "c"})
+	_, err := l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: botTrajectory(), ClientKey: "c", Signals: testSig("")})
 	if !errors.Is(err, ErrLowScore) {
 		t.Fatalf("want ErrLowScore, got %v", err)
 	}
@@ -487,7 +518,7 @@ func TestTelemetryEmitted(t *testing.T) {
 	tel := TelemetryFunc{Verify: func(e VerifyEvent) { mu.Lock(); events = append(events, e); mu.Unlock() }}
 	l, clk := newLayer(t, Config{Telemetry: tel})
 	iss := issueSlide(t, l, clk, "c")
-	_, _ = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 1, Y: 1}), Trajectory: humanTrajectory(), ClientKey: "c"})
+	_, _ = l.Verify(context.Background(), VerifyRequest{ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 1, Y: 1}), Trajectory: humanTrajectory(), ClientKey: "c", Signals: testSig("")})
 	mu.Lock()
 	defer mu.Unlock()
 	if len(events) != 1 || events[0].Outcome != "bad_answer" || events[0].Score == 0 {
@@ -559,7 +590,7 @@ func TestRequireBrowserRejectsCurlUA(t *testing.T) {
 	_, err = l.Issue(context.Background(), IssueRequest{
 		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 1, Y: 1, Width: 60, Height: 60}),
 		ClientKey: "sid:browser-test",
-		Signals:   ClientSignals{UserAgent: "curl/8.0.0"},
+		Signals:   ClientSignals{IP: testClientIP, UserAgent: "curl/8.0.0"},
 	})
 	if !errors.Is(err, ErrBrowserRequired) {
 		t.Fatalf("want ErrBrowserRequired, got %v", err)
@@ -567,7 +598,7 @@ func TestRequireBrowserRejectsCurlUA(t *testing.T) {
 }
 
 func TestRequireBrowserRejectsMissingJS(t *testing.T) {
-	l, err := New(NewMemoryStore(), Config{SecretKey: testKey, PoWProbeProb: -1, PoWJitterBits: -1, MinSolveTime: time.Millisecond})
+	l, err := New(NewMemoryStore(), Config{SecretKey: testKey, PoWProbeProb: -1, PoWJitterBits: -1, MinSolveTime: time.Millisecond, DisableSessionWarmup: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,6 +607,7 @@ func TestRequireBrowserRejectsMissingJS(t *testing.T) {
 	iss, err := l.Issue(context.Background(), IssueRequest{
 		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
 		ClientKey: "sid:js-test",
+		Signals:   testSig(""),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -584,6 +616,7 @@ func TestRequireBrowserRejectsMissingJS(t *testing.T) {
 	tr := humanTrajectory()
 	_, err = l.Verify(context.Background(), VerifyRequest{
 		ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: tr, ClientKey: "sid:js-test",
+		Signals: testSig(""),
 	})
 	if !errors.Is(err, ErrJSChallengeFailed) {
 		t.Fatalf("want ErrJSChallengeFailed, got %v", err)
@@ -594,6 +627,7 @@ func TestRequirePiecePress(t *testing.T) {
 	l, err := New(NewMemoryStore(), Config{
 		SecretKey: testKey, PoWProbeProb: -1, PoWJitterBits: -1,
 		MinSolveTime: time.Millisecond, AllowNonBrowser: true, // isolate piece gate
+		DisableSessionWarmup: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -603,6 +637,7 @@ func TestRequirePiecePress(t *testing.T) {
 	iss, err := l.Issue(context.Background(), IssueRequest{
 		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
 		ClientKey: "sid:piece-test",
+		Signals:   testSig(""),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -613,6 +648,7 @@ func TestRequirePiecePress(t *testing.T) {
 	_, err = l.Verify(context.Background(), VerifyRequest{
 		ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: tr,
 		ClientKey: "sid:piece-test",
+		Signals:   testSig(""),
 	})
 	if !errors.Is(err, ErrPiecePressRequired) {
 		t.Fatalf("want ErrPiecePressRequired, got %v", err)
@@ -622,12 +658,14 @@ func TestRequirePiecePress(t *testing.T) {
 	iss2, _ := l.Issue(context.Background(), IssueRequest{
 		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
 		ClientKey: "sid:piece-test",
+		Signals:   testSig(""),
 	})
 	clk.advance(2 * time.Second)
 	tr2 := humanTrajectory()
 	if _, err := l.Verify(context.Background(), VerifyRequest{
 		ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: tr2,
 		ClientKey: "sid:piece-test",
+		Signals:   testSig(""),
 	}); err != nil {
 		t.Fatalf("piece_down present should pass: %v", err)
 	}

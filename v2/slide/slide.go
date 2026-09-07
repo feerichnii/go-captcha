@@ -9,6 +9,7 @@ package slide
 import (
 	"errors"
 	"image"
+	"math"
 
 	"github.com/feerichnii/go-captcha/v2/base/helper"
 	"github.com/feerichnii/go-captcha/v2/base/imagedata"
@@ -16,6 +17,7 @@ import (
 	"github.com/feerichnii/go-captcha/v2/base/option"
 	"github.com/feerichnii/go-captcha/v2/base/randgen"
 	"github.com/feerichnii/go-captcha/v2/base/random"
+	"golang.org/x/image/draw"
 )
 
 // Captcha defines the interface for slide CAPTCHA
@@ -35,6 +37,11 @@ var (
 	ShadowImageTypeErr      = errors.New("tile shadow image must be of type image.Image")
 	MaskImageTypeErr        = errors.New("tile mask image must be of type image.Image")
 	EmptyBackgroundImageErr = errors.New("no background image")
+)
+
+const (
+	autoSlotMin = 4
+	autoSlotMax = 7
 )
 
 // captcha is the concrete implementation of the Captcha interface
@@ -80,7 +87,15 @@ func (c *captcha) GetOptions() *Options {
 	return c.opts
 }
 
-// Generate generates slide CAPTCHA data with multiple drop slots (default 3).
+func (c *captcha) resolveSlotCount() int {
+	n := c.opts.genGraphNumber
+	if n < 1 {
+		return random.RandInt(autoSlotMin, autoSlotMax)
+	}
+	return n
+}
+
+// Generate generates slide CAPTCHA data with multiple drop slots (default random 4–7).
 // All slots share the same silhouette; humans (and bots) must match the tile
 // to the background crop — only one position is correct. The secret (X,Y) is
 // only available via GetData() — never GetPublicData().
@@ -89,12 +104,12 @@ func (c *captcha) Generate() (CaptchaData, error) {
 		return nil, err
 	}
 
-	nSlots := c.opts.genGraphNumber
-	if nSlots < 1 {
-		nSlots = 1
-	}
+	nSlots := c.resolveSlotCount()
+	size := c.opts.imageSize
+	bgSrc := randgen.RandImage(c.resources.rangBackgrounds)
+	masterBg := cropMasterBackground(bgSrc, size.Width, size.Height)
 
-	blocks, tilePoint := c.genGraphBlocks(c.opts.imageSize, c.opts.rangeGraphSize, nSlots)
+	blocks, tilePoint := c.genGraphBlocksSimilar(masterBg, size, c.opts.rangeGraphSize, nSlots)
 	if len(blocks) == 0 {
 		return nil, GenerateDataErr
 	}
@@ -105,6 +120,11 @@ func (c *captcha) Generate() (CaptchaData, error) {
 		if correctIdx < 0 {
 			correctIdx = 0
 		}
+	}
+	// Re-rank: ensure the block at correctIdx is the texture-chosen target.
+	// genGraphBlocksSimilar puts the correct (tile-source) block at index 0.
+	if correctIdx != 0 {
+		blocks[0], blocks[correctIdx] = blocks[correctIdx], blocks[0]
 	}
 	block := blocks[correctIdx]
 	if block == nil {
@@ -120,15 +140,16 @@ func (c *captcha) Generate() (CaptchaData, error) {
 		return nil, GraphImageErr
 	}
 
-	masterImage, masterBgImage, err := c.genMasterImage(c.opts.imageSize, blocks, graphs)
+	masterImage, err := c.genMasterImageOn(masterBg, size, blocks, graphs)
 	if err != nil {
 		return nil, err
 	}
 
-	tileImage, err := c.genTileImage(correct.MaskImage, masterBgImage, correct.OverlayImage, block)
+	tileImage, err := c.genTileImage(correct.MaskImage, masterBg, correct.OverlayImage, block)
 	if err != nil {
 		return nil, err
 	}
+	tileImage = DistortTile(tileImage)
 
 	// Horizontal slide: tile starts on the left at the same Y as the notches.
 	block.TileX = tilePoint.X
@@ -138,9 +159,22 @@ func (c *captcha) Generate() (CaptchaData, error) {
 
 	return &CaptData{
 		block:       block,
+		slotCount:   len(blocks),
 		masterImage: imagedata.NewJPEGImageData(masterImage),
 		tileImage:   imagedata.NewPNGImageData(tileImage),
 	}, nil
+}
+
+func cropMasterBackground(bg image.Image, width, height int) image.Image {
+	if bg == nil || width <= 0 || height <= 0 {
+		return bg
+	}
+	b := bg.Bounds()
+	dst := image.NewNRGBA(image.Rect(0, 0, width, height))
+	point := randgen.RangCutImagePosTextured(width, height, bg, 16)
+	draw.Draw(dst, dst.Bounds(), bg, point, draw.Src)
+	_ = b
+	return dst
 }
 
 // pickSlotGraphs picks one GraphImage from the pool and assigns that same
@@ -164,8 +198,8 @@ func (c *captcha) pickSlotGraphs(nSlots, correctIdx int) []*GraphImage {
 	return out
 }
 
-// genMasterImage generates the master CAPTCHA image and background image.
-func (c *captcha) genMasterImage(size *option.Size, blocks []*Block, graphs []*GraphImage) (image.Image, image.Image, error) {
+// genMasterImageOn draws shadows onto a pre-cropped master background.
+func (c *captcha) genMasterImageOn(masterBg image.Image, size *option.Size, blocks []*Block, graphs []*GraphImage) (image.Image, error) {
 	var drawBlocks = make([]*DrawBlock, 0, len(blocks))
 	for i := 0; i < len(blocks); i++ {
 		block := blocks[i]
@@ -181,13 +215,15 @@ func (c *captcha) genMasterImage(size *option.Size, blocks []*Block, graphs []*G
 		})
 	}
 
-	return c.drawImage.DrawWithNRGBA(&DrawImageParams{
+	img, _, err := c.drawImage.DrawWithNRGBA(&DrawImageParams{
 		Width:             size.Width,
 		Height:            size.Height,
-		Background:        randgen.RandImage(c.resources.rangBackgrounds),
+		Background:        masterBg,
 		Alpha:             c.opts.imageAlpha,
 		CaptchaDrawBlocks: drawBlocks,
+		BackgroundPreCropped: true,
 	})
+	return img, err
 }
 
 // genTileImage generates a tile image
@@ -220,11 +256,10 @@ func (c *captcha) randGraphAngle() int {
 	return random.RandInt(angle.Min, angle.Max)
 }
 
-// genGraphBlocks places drop slots across the master and picks a left-side
-// tile start. Notch X is always in [0, width-tileW] so a horizontal slider
-// can reach every target.
-func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, length int) ([]*Block, *option.Point) {
-	var blocks = make([]*Block, 0, length)
+// genGraphBlocksSimilar places one correct slot (high texture) then decoys with
+// similar local texture and minimum separation. Index 0 is the tile-source slot
+// before Generate shuffles it into correctIdx.
+func (c *captcha) genGraphBlocksSimilar(bg image.Image, imageSize *option.Size, size *option.RangeVal, length int) ([]*Block, *option.Point) {
 	width := imageSize.Width
 	height := imageSize.Height
 
@@ -237,65 +272,143 @@ func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, 
 	if maxX < 0 {
 		maxX = 0
 	}
-	// Leave room on the left for the tile start position.
 	leftMin := cWidth + 5
 	if leftMin > maxX {
 		leftMin = 0
-	}
-	usable := maxX - leftMin
-	if usable < 0 {
-		usable = 0
 	}
 
 	yLo, yHi := 5, height-cHeight-5
 	if yHi < yLo {
 		yHi = yLo
 	}
-	y := random.RandInt(yLo, yHi)
+	baseY := random.RandInt(yLo, yHi)
 
-	for i := 0; i < length; i++ {
-		block := &Block{}
-		seg := 0
-		if length > 0 {
-			seg = usable / length
-		}
-		start := leftMin + i*seg
-		end := start + seg
-		if i == length-1 {
-			end = maxX
-		}
-		if end > maxX {
-			end = maxX
-		}
-		if start > end {
-			start = end
-		}
-		if end-start >= 6 {
-			block.X = random.RandInt(start+2, end-2)
-		} else {
-			block.X = random.RandInt(start, end)
-		}
-		if block.X > maxX {
-			block.X = maxX
-		}
-		if block.X < 0 {
-			block.X = 0
-		}
-
+	type cand struct {
+		x, y int
+		tex  float64
+	}
+	candidates := make([]cand, 0, 64)
+	step := cWidth / 4
+	if step < 4 {
+		step = 4
+	}
+	for x := leftMin; x <= maxX; x += step {
+		y := baseY
 		if c.opts.enableGraphVerticalRandom {
 			y = random.RandInt(yLo, yHi)
 		}
+		tex := randgen.TextureScore(bg, x, y, cWidth, cHeight)
+		candidates = append(candidates, cand{x: x, y: y, tex: tex})
+	}
+	// Extra random samples for denser coverage.
+	for i := 0; i < 24; i++ {
+		x := random.RandInt(leftMin, maxX)
+		y := baseY
+		if c.opts.enableGraphVerticalRandom {
+			y = random.RandInt(yLo, yHi)
+		}
+		tex := randgen.TextureScore(bg, x, y, cWidth, cHeight)
+		candidates = append(candidates, cand{x: x, y: y, tex: tex})
+	}
+	if len(candidates) == 0 {
+		candidates = append(candidates, cand{x: leftMin, y: baseY, tex: 0})
+	}
 
-		block.Y = y
-		block.Width = cWidth
-		block.Height = cHeight
-		block.Angle = randAngle
-		blocks = append(blocks, block)
+	best := 0
+	for i := 1; i < len(candidates); i++ {
+		if candidates[i].tex > candidates[best].tex {
+			best = i
+		}
+	}
+	correct := candidates[best]
+	minSep := cWidth * 2 / 3
+	if minSep < 24 {
+		minSep = 24
+	}
+
+	placed := make([]cand, 0, length)
+	placed = append(placed, correct)
+
+	abs := func(v float64) float64 {
+		if v < 0 {
+			return -v
+		}
+		return v
+	}
+	tooClose := func(p cand, set []cand) bool {
+		for _, q := range set {
+			dx := p.x - q.x
+			dy := p.y - q.y
+			if dx*dx+dy*dy < minSep*minSep {
+				return true
+			}
+		}
+		return false
+	}
+
+	for len(placed) < length {
+		bestI := -1
+		bestDiff := math.MaxFloat64
+		for i, p := range candidates {
+			if tooClose(p, placed) {
+				continue
+			}
+			d := abs(p.tex - correct.tex)
+			if d < bestDiff {
+				bestDiff = d
+				bestI = i
+			}
+		}
+		if bestI < 0 {
+			// Relax separation and take farthest remaining X.
+			farthestI := -1
+			farthestD := -1
+			for i, p := range candidates {
+				dup := false
+				for _, q := range placed {
+					if p.x == q.x && p.y == q.y {
+						dup = true
+						break
+					}
+				}
+				if dup {
+					continue
+				}
+				minD := 1 << 30
+				for _, q := range placed {
+					dx := p.x - q.x
+					if dx < 0 {
+						dx = -dx
+					}
+					if dx < minD {
+						minD = dx
+					}
+				}
+				if minD > farthestD {
+					farthestD = minD
+					farthestI = i
+				}
+			}
+			if farthestI < 0 {
+				break
+			}
+			bestI = farthestI
+		}
+		placed = append(placed, candidates[bestI])
+	}
+
+	blocks := make([]*Block, 0, len(placed))
+	for _, p := range placed {
+		blocks = append(blocks, &Block{
+			X: p.x, Y: p.y,
+			Width: cWidth, Height: cHeight,
+			Angle: randAngle,
+		})
 	}
 
 	point := &option.Point{
 		X: random.RandInt(5, cWidth/2),
-		Y: y,
+		Y: blocks[0].Y,
 	}
 	if point.X > maxX {
 		point.X = maxX

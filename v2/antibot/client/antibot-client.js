@@ -429,7 +429,17 @@ export class AntiBotClient {
    */
   async issue(params = {}) {
     const { ok, status, data } = await this._post(this.issueUrl, params);
-    if (!ok) throw new Error(`antibot: issue failed (${status})`);
+    if (!ok) {
+      const err = new Error(
+        data?.error
+          ? `antibot: ${data.error}${data.retry_after_ms ? ` (retry_after_ms=${data.retry_after_ms})` : ""}`
+          : `antibot: issue failed (${status})`
+      );
+      err.status = status;
+      err.data = data;
+      err.retry_after_ms = data?.retry_after_ms;
+      throw err;
+    }
     const ch = { ...data, _powPromise: null, _browser: collectBrowserSignals() };
     if (data.js_challenge) {
       ch._jsPromise = solveJSChallenge(data.js_challenge, ch._browser);

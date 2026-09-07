@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"time"
 
 	"github.com/feerichnii/go-captcha/v2/base/challenge"
@@ -62,10 +63,8 @@ type IssueRequest struct {
 	// Answer is json of GetData() — server only; encrypted at rest.
 	Answer json.RawMessage
 	// ClientKey binds the challenge to a server-issued session id (required).
-	// Must NOT be an IP or IP:port — use MintSession / EnsureSessionCookie.
-	// Pass IP/UA via Signals instead.
 	ClientKey string
-	// Signals are optional side-channels (IP, UA, ASN, session age) for risk.
+	// Signals must include authoritative ClientSignals.IP (exact client address).
 	Signals ClientSignals
 	// Browser is optional client-reported environment hints (untrusted).
 	Browser BrowserSignals
@@ -95,25 +94,20 @@ type VerifyRequest struct {
 	Answer     json.RawMessage // SlideSubmit / RotateSubmit
 	Trajectory Trajectory
 	PoWNonce   string
-	ClientKey  string // must match the key used at Issue
+	ClientKey  string
 	Signals    ClientSignals
 	Browser    BrowserSignals
 }
 
 // VerifyResult is returned on successful verification.
 type VerifyResult struct {
-	// Score is the behavior estimate in [0,1]; treat as risk input, not proof.
-	Score float64 `json:"score"`
-	// Risk is 1-Score.
-	Risk float64 `json:"risk"`
-	// RiskLevel is the client's persistent escalation level after this verify.
-	RiskLevel int `json:"risk_level"`
-	// RequirePoWNext reports whether the next Issue for this client gets PoW.
-	RequirePoWNext bool `json:"require_pow_next"`
+	Score          float64 `json:"score"`
+	Risk           float64 `json:"risk"`
+	RiskLevel      int     `json:"risk_level"`
+	RequirePoWNext bool    `json:"require_pow_next"`
 }
 
 func (l *Layer) challengeKey(id string) string { return l.cfg.KeyPrefix + "ch:" + id }
-func (l *Layer) attemptKey(id string) string   { return l.cfg.KeyPrefix + "att:" + id }
 
 func hashClient(clientKey string) string {
 	sum := sha256.Sum256([]byte(clientKey))
@@ -137,6 +131,17 @@ func validateClientKey(key string) error {
 	return nil
 }
 
+func (l *Layer) requireIPHash(signals ClientSignals) (netip.Addr, string, error) {
+	if signals.IP == "" {
+		return netip.Addr{}, "", ErrMissingClientIP
+	}
+	addr, err := parseCanonicalIP(signals.IP)
+	if err != nil {
+		return netip.Addr{}, "", ErrMissingClientIP
+	}
+	return addr, HashIP(l.cfg.SecretKey, addr), nil
+}
+
 // Issue stores a challenge and returns a public id (+ PoW when the client is risky).
 func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
 	if !validKind(req.Kind) || len(req.Answer) == 0 {
@@ -148,7 +153,14 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	if !json.Valid(req.Answer) {
 		return nil, ErrInvalidRequest
 	}
-	if err := l.CheckIssueRate(ctx, req.ClientKey); err != nil {
+	addr, ipHash, err := l.requireIPHash(req.Signals)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.CheckFrozen(ctx, ipHash); err != nil {
+		return nil, err
+	}
+	if err := l.CheckIssueRate(ctx, req.ClientKey, ipHash); err != nil {
 		return nil, err
 	}
 	if l.cfg.RequireBrowser() && LooksLikeNonBrowserUA(req.Signals.UserAgent) {
@@ -157,23 +169,14 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 
 	hash := hashClient(req.ClientKey)
 	l.noteIssued(ctx, hash)
+	l.noteSessionRotation(ctx, ipHash, hash)
+	if !l.cfg.DisableSessionWarmup {
+		l.ensureWarmup(ctx, hash)
+	}
 
-	level, err := l.riskLevel(ctx, hash)
+	level, err := l.effectiveRiskAtIssue(ctx, hash, ipHash, addr, req)
 	if err != nil {
 		return nil, err
-	}
-	if req.Suspicious && level < 1 {
-		level = 1
-	}
-	// Browser / UA signals at issue time can raise the effective level for PoW
-	// selection only (persistent risk is updated on Verify).
-	bDelta, _ := BrowserRisk(req.Browser, true /* JS not verifiable yet */)
-	if hints := FormatUAHint(req.Signals.UserAgent); len(hints) > 0 {
-		bDelta++
-	}
-	level += bDelta
-	if level > l.cfg.MaxRiskLevel {
-		level = l.cfg.MaxRiskLevel
 	}
 
 	id, err := challenge.NewID()
@@ -198,6 +201,7 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		Kind:        req.Kind,
 		Answer:      enc,
 		ClientHash:  hash,
+		IPHash:      ipHash,
 		CreatedAtMs: now.UnixMilli(),
 		ExpiresAtMs: now.Add(l.cfg.TTL).UnixMilli(),
 		JSNonce:     jsCh.Nonce,
@@ -244,10 +248,69 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	}, nil
 }
 
-// Verify enforces rate limits, atomic attempt counting, client binding,
-// server-side timing, PoW, JS challenge and geometry; the challenge is consumed
-// atomically on success. Behavior score and browser signals adjust the client's
-// persistent risk level unless Config.HardRejectScore is set.
+func (l *Layer) ensureWarmup(ctx context.Context, sessionHash string) {
+	key := l.warmupKey(sessionHash)
+	if _, err := l.store.Get(ctx, key); errors.Is(err, ErrNotFound) {
+		_ = l.store.Set(ctx, key, []byte("1"), l.cfg.RiskTTL)
+	}
+}
+
+func (l *Layer) clearWarmup(ctx context.Context, sessionHash string) {
+	_ = l.store.Delete(ctx, l.warmupKey(sessionHash))
+}
+
+func (l *Layer) hasWarmup(ctx context.Context, sessionHash string) bool {
+	_, err := l.store.Get(ctx, l.warmupKey(sessionHash))
+	return err == nil
+}
+
+func (l *Layer) noteSessionRotation(ctx context.Context, ipHash, sessionHash string) {
+	// Count distinct sessions per IP roughly via issue-time increments.
+	_, _ = l.store.Incr(ctx, l.sessRotKey(ipHash), l.cfg.FailRateWindow)
+	_ = sessionHash
+}
+
+func (l *Layer) effectiveRiskAtIssue(ctx context.Context, sessionHash, ipHash string, addr netip.Addr, req IssueRequest) (int, error) {
+	level, err := l.riskLevel(ctx, sessionHash)
+	if err != nil {
+		return 0, err
+	}
+	if ipN, err := l.store.IncrBy(ctx, l.riskIPKey(ipHash), 0, l.cfg.RiskTTL); err == nil && int(ipN) > level {
+		level = int(ipN)
+	}
+	if !l.cfg.DisableSessionWarmup && l.hasWarmup(ctx, sessionHash) {
+		level++
+	}
+	if rot, err := l.store.IncrBy(ctx, l.sessRotKey(ipHash), 0, l.cfg.FailRateWindow); err == nil && rot >= 8 {
+		level++
+	}
+	level += l.softPrefixRisk(ctx, addr)
+	if req.Suspicious && level < 1 {
+		level = 1
+	}
+	bDelta, _ := BrowserRisk(req.Browser, true)
+	if hints := FormatUAHint(req.Signals.UserAgent); len(hints) > 0 {
+		bDelta++
+	}
+	if asn := l.lookupASN(addr); asn != 0 && req.Signals.ASN == 0 {
+		req.Signals.ASN = asn
+	}
+	_ = req.Signals.ASN // soft telemetry only
+	level += bDelta
+	if level > l.cfg.MaxRiskLevel {
+		level = l.cfg.MaxRiskLevel
+	}
+	return level, nil
+}
+
+func (l *Layer) lookupASN(addr netip.Addr) int {
+	if l.cfg.ASNProvider == nil {
+		return 0
+	}
+	return l.cfg.ASNProvider.ASN(addr)
+}
+
+// Verify enforces rate limits, freeze, tech gates, then one-shot geometry claim.
 func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, error) {
 	if !challenge.IsValidID(req.ID) {
 		return nil, ErrInvalidRequest
@@ -264,7 +327,14 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	if len(req.Trajectory.Points) > l.cfg.MaxTrajectoryPoints || len(req.Trajectory.Events) > l.cfg.MaxTrajectoryEvents {
 		return nil, ErrInvalidRequest
 	}
-	if err := l.CheckVerifyRate(ctx, req.ClientKey); err != nil {
+	_, ipHash, err := l.requireIPHash(req.Signals)
+	if err != nil {
+		return nil, err
+	}
+	if err := l.CheckFrozen(ctx, ipHash); err != nil {
+		return nil, err
+	}
+	if err := l.CheckVerifyRate(ctx, req.ClientKey, ipHash); err != nil {
 		return nil, err
 	}
 	if l.cfg.RequireBrowser() && LooksLikeNonBrowserUA(req.Signals.UserAgent) {
@@ -280,20 +350,8 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		return nil, err
 	}
 
-	// 1. Atomic attempt accounting happens before anything is evaluated, so
-	//    parallel guesses cannot exceed MaxAttempts.
+	// 1. Read-only load + bind (does not consume).
 	chKey := l.challengeKey(req.ID)
-	attempts, err := l.store.Incr(ctx, l.attemptKey(req.ID), l.cfg.TTL)
-	if err != nil {
-		return fail(wrapStore(err))
-	}
-	ev.Attempt = attempts
-	if attempts > int64(l.cfg.MaxAttempts) {
-		_ = l.store.Delete(ctx, chKey)
-		return fail(ErrMaxAttempts)
-	}
-
-	// 2. Load and bind.
 	raw, err := l.store.Get(ctx, chKey)
 	if err != nil {
 		return fail(wrapStore(err))
@@ -310,12 +368,12 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		_ = l.store.Delete(ctx, chKey)
 		return fail(ErrNotFound)
 	}
-	if subtle.ConstantTimeCompare([]byte(rec.ClientHash), []byte(hash)) != 1 {
-		// Do not reveal that the id exists for another client.
+	if subtle.ConstantTimeCompare([]byte(rec.ClientHash), []byte(hash)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(rec.IPHash), []byte(ipHash)) != 1 {
 		return fail(ErrNotFound)
 	}
 
-	// 3. Server-side timing.
+	// 2. Tech gates — failures keep the challenge.
 	elapsed := nowMs - rec.CreatedAtMs
 	ev.ElapsedMs = elapsed
 	ev.TrajectoryMs = req.Trajectory.DurationMs()
@@ -323,19 +381,15 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		return fail(ErrTooFast)
 	}
 
-	// 4. Proof-of-work (when attached at issue time — includes probe PoW).
 	if rec.PoWDiff > 0 && !VerifyPoW(rec.PoWSalt, req.PoWNonce, rec.PoWDiff, l.cfg.MaxNonceLen) {
-		l.recordFail(ctx, hash)
 		return fail(ErrPoWInvalid)
 	}
 
-	// 5. JS / DOM challenge (hard when RequireBrowser; otherwise soft risk).
 	jsOK := true
 	var extraBrowserReasons []string
 	if rec.JSNonce != "" {
 		if req.Browser.JSChallengeResponse == "" {
 			if l.cfg.RequireBrowser() {
-				l.recordFail(ctx, hash)
 				return fail(ErrJSChallengeFailed)
 			}
 			extraBrowserReasons = append(extraBrowserReasons, "js_challenge_skipped")
@@ -343,7 +397,6 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 			candidates := ProbeCandidates(req.Browser, rec.JSProbe)
 			jsOK = CheckJSChallenge(JSChallenge{Nonce: rec.JSNonce, Probe: rec.JSProbe}, req.Browser.JSChallengeResponse, candidates...)
 			if !jsOK && l.cfg.RequireBrowser() {
-				l.recordFail(ctx, hash)
 				return fail(ErrJSChallengeFailed)
 			}
 		}
@@ -351,15 +404,12 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	bDelta, bReasons := BrowserRisk(req.Browser, jsOK)
 	bReasons = append(bReasons, extraBrowserReasons...)
 
-	// 5b. Piece press (checkbox analog) for slide/rotate.
 	if l.cfg.RequirePiecePress() && (rec.Kind == KindSlide || rec.Kind == KindRotate) {
 		if err := ValidatePieceDown(req.Trajectory, rec.TileW, rec.TileH, l.cfg.MinPiecePressDwellMs); err != nil {
-			l.recordFail(ctx, hash)
 			return fail(err)
 		}
 	}
 
-	// 6. Trajectory structure + behavior score.
 	issues := ValidateTrajectory(req.Trajectory, l.cfg.MaxJumpPx)
 	if rec.Kind == KindSlide {
 		var sub SlideSubmit
@@ -379,37 +429,45 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}
 	ev.RiskLevelBefore = levelBefore
 
-	// 7. Geometry.
+	// 3. Atomic geometry claim (consumes challenge + IP geo lock).
+	claim, err := l.ClaimGeometry(ctx, req.ID, hash, ipHash)
+	if err != nil {
+		return fail(err)
+	}
+	rec = claim.Record
+	ev.Attempt = 1
+
 	plain, err := challenge.Decrypt(l.cfg.SecretKey, rec.Answer, []byte(rec.ID+":"+rec.Kind))
 	if err != nil {
+		_, _ = l.FinalizeFailure(ctx, hash, ipHash, claim.ClaimToken)
 		return fail(fmt.Errorf("%w: answer decrypt: %v", ErrStore, err))
 	}
 	tol := Tolerance{Slide: l.cfg.SlidePadding, Rotate: l.cfg.RotatePadding}
 	if !l.checker(rec.Kind, plain, req.Answer, tol) {
+		retry, _ := l.FinalizeFailure(ctx, hash, ipHash, claim.ClaimToken)
 		dec, _ := l.EvaluateRisk(ctx, hash, RiskInputs{
 			Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
 			Signals: req.Signals, Failed: true, NowMs: nowMs,
 		})
 		ev.RiskLevelAfter = dec.LevelAfter
-		if attempts >= int64(l.cfg.MaxAttempts) {
-			_ = l.store.Delete(ctx, chKey)
-			return fail(ErrMaxAttempts)
-		}
-		return fail(ErrBadAnswer)
+		ev.Outcome = outcomeName(ErrBadAnswer)
+		return nil, &BadAnswerError{RetryAfterMs: retry}
 	}
 
-	// 8. Consume atomically; exactly one concurrent correct submission wins.
-	if _, err := l.store.GetDel(ctx, chKey); err != nil {
+	if err := l.FinalizeSuccess(ctx, ipHash, claim.ClaimToken); err != nil {
 		return fail(wrapStore(err))
 	}
-	_ = l.store.Delete(ctx, l.attemptKey(req.ID))
 
+	clean := isCleanSuccess(sr, bDelta, req.Signals, nowMs, l.cfg.MinSessionAge)
 	dec, err := l.EvaluateRisk(ctx, hash, RiskInputs{
 		Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
-		Signals: req.Signals, Solved: true, NowMs: nowMs,
+		Signals: req.Signals, Solved: clean, NowMs: nowMs,
 	})
 	if err != nil {
 		return fail(err)
+	}
+	if clean {
+		l.clearWarmup(ctx, hash)
 	}
 	ev.RiskLevelAfter = dec.LevelAfter
 
@@ -426,7 +484,36 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}, nil
 }
 
-// tileSizeFromAnswer extracts public tile/knob dimensions from the sealed answer JSON.
+// BadAnswerError wraps ErrBadAnswer with retry_after after freeze.
+type BadAnswerError struct {
+	RetryAfterMs int64
+}
+
+func (e *BadAnswerError) Error() string {
+	if e == nil {
+		return ErrBadAnswer.Error()
+	}
+	return fmt.Sprintf("%s (retry_after_ms=%d)", ErrBadAnswer.Error(), e.RetryAfterMs)
+}
+
+func (e *BadAnswerError) Is(target error) bool { return target == ErrBadAnswer }
+
+func isCleanSuccess(sr ScoreResult, browserDelta int, sig ClientSignals, nowMs int64, minAge time.Duration) bool {
+	if sr.Issues.Suspicious() || !sr.Consistent {
+		return false
+	}
+	if browserDelta > 0 {
+		return false
+	}
+	if minAge > 0 && sig.SessionIssuedAtMs > 0 {
+		age := nowMs - sig.SessionIssuedAtMs
+		if age >= 0 && age < minAge.Milliseconds() {
+			return false
+		}
+	}
+	return true
+}
+
 func tileSizeFromAnswer(kind string, answer json.RawMessage) (w, h int) {
 	switch kind {
 	case KindSlide, KindRotate:

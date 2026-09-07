@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"time"
 )
@@ -185,15 +186,17 @@ func EnsureSessionCookie(w http.ResponseWriter, r *http.Request, secret []byte, 
 }
 
 // SignalsFromRequest builds ClientSignals from an HTTP request.
-// Prefer X-Forwarded-For / X-Real-IP only behind a trusted proxy.
+// Without TrustedProxies, only RemoteAddr is trusted (spoofed XFF ignored).
 func SignalsFromRequest(r *http.Request, sess Session) ClientSignals {
-	ip := r.Header.Get("X-Real-IP")
-	if ip == "" {
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-			ip = strings.TrimSpace(strings.Split(xff, ",")[0])
-		}
-	}
-	if ip == "" {
+	return SignalsFromRequestTrusted(r, sess, nil)
+}
+
+// SignalsFromRequestTrusted uses ClientIP with the given trusted proxy list.
+func SignalsFromRequestTrusted(r *http.Request, sess Session, trusted []netip.Prefix) ClientSignals {
+	ip := ""
+	if addr, err := ClientIP(r, trusted); err == nil {
+		ip = CanonicalIPString(addr)
+	} else {
 		ip = ParseIP(r.RemoteAddr)
 	}
 	var issuedMs int64

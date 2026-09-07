@@ -23,6 +23,7 @@ type Store interface {
 
 // ChallengeRecord is the server-side challenge state.
 // Answer is AEAD-encrypted with Config.SecretKey and bound to ID.
+// Existence of the store key is the only one-shot flag (no Consumed field).
 type ChallengeRecord struct {
 	ID          string `json:"id"`
 	Kind        string `json:"kind"` // slide | rotate
@@ -30,6 +31,7 @@ type ChallengeRecord struct {
 	PoWDiff     int    `json:"pow_diff,omitempty"`
 	PoWSalt     string `json:"pow_salt,omitempty"`
 	ClientHash  string `json:"client_hash"`
+	IPHash      string `json:"ip_hash"` // HMAC of exact client IP at Issue
 	CreatedAtMs int64  `json:"created_at_ms"`
 	ExpiresAtMs int64  `json:"expires_at_ms"`
 	// JS challenge minted at Issue; verified on Verify.

@@ -30,11 +30,11 @@ func testSlideCaptcha(t *testing.T, graphs []*GraphImage) Captcha {
 	return builder.Make()
 }
 
-func TestDefaultThreeDropSlots(t *testing.T) {
+func TestDefaultAutoSlotCount(t *testing.T) {
 	opts := NewOptions()
 	defaultOptions()(opts)
-	if opts.GetGenGraphNumber() != 3 {
-		t.Fatalf("default slots want 3, got %d", opts.GetGenGraphNumber())
+	if opts.GetGenGraphNumber() != 0 {
+		t.Fatalf("default slots want 0 (auto 4–7), got %d", opts.GetGenGraphNumber())
 	}
 }
 
@@ -96,11 +96,64 @@ func TestPickSlotGraphsIdenticalSilhouette(t *testing.T) {
 	}
 }
 
-func TestWithGenGraphNumberMinOne(t *testing.T) {
+func TestWithGenGraphNumberAutoZero(t *testing.T) {
 	opts := NewOptions()
 	WithGenGraphNumber(0)(opts)
-	if opts.GetGenGraphNumber() != 1 {
+	if opts.GetGenGraphNumber() != 0 {
 		t.Fatalf("got %d", opts.GetGenGraphNumber())
+	}
+}
+
+func TestGenerateSlotCountInRange(t *testing.T) {
+	capt := testSlideCaptcha(t, []*GraphImage{
+		shapeGraph(255, 0, 0, 200),
+		shapeGraph(0, 255, 0, 200),
+		shapeGraph(0, 0, 255, 200),
+	})
+	seen := map[int]bool{}
+	for i := 0; i < 40; i++ {
+		data, err := capt.Generate()
+		if err != nil {
+			t.Fatal(err)
+		}
+		n := data.GetSlotCount()
+		if n < 4 || n > 7 {
+			t.Fatalf("slot count %d outside [4,7]", n)
+		}
+		seen[n] = true
+	}
+	if len(seen) < 2 {
+		t.Fatalf("expected some variety in auto slot counts, got %v", seen)
+	}
+}
+
+func TestTileNotExactCrop(t *testing.T) {
+	src := solid(64, 64, color.NRGBA{R: 40, G: 80, B: 120, A: 255})
+	// Checker so warp/noise has structure to change.
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			if (x/8+y/8)%2 == 0 {
+				src.SetNRGBA(x, y, color.NRGBA{R: 200, G: 40, B: 40, A: 255})
+			}
+		}
+	}
+	out := DistortTile(src)
+	if out == nil {
+		t.Fatal("nil distort")
+	}
+	ob := out.Bounds()
+	diff := 0
+	for y := 0; y < 64; y++ {
+		for x := 0; x < 64; x++ {
+			a := src.NRGBAAt(x, y)
+			b := color.NRGBAModel.Convert(out.At(ob.Min.X+x, ob.Min.Y+y)).(color.NRGBA)
+			if a != b {
+				diff++
+			}
+		}
+	}
+	if diff < 100 {
+		t.Fatalf("expected distorted tile to differ substantially, changed=%d", diff)
 	}
 }
 

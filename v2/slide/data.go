@@ -17,11 +17,14 @@ type CaptchaData interface {
 	GetPublicData() *PublicBlock
 	GetMasterImage() imagedata.JPEGImageData
 	GetTileImage() imagedata.PNGImageData
+	// GetSlotCount returns how many drop slots (correct + decoys) were drawn.
+	GetSlotCount() int
 }
 
 // CaptData is the concrete implementation of the CaptchaData interface
 type CaptData struct {
 	block       *Block
+	slotCount   int
 	masterImage imagedata.JPEGImageData
 	tileImage   imagedata.PNGImageData
 }
@@ -59,4 +62,9 @@ func (c CaptData) GetMasterImage() imagedata.JPEGImageData {
 // return: Tile image in PNG format
 func (c CaptData) GetTileImage() imagedata.PNGImageData {
 	return c.tileImage
+}
+
+// GetSlotCount returns the number of drop slots drawn on the master image.
+func (c CaptData) GetSlotCount() int {
+	return c.slotCount
 }

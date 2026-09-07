@@ -130,6 +130,11 @@ func RangCutImagePosTextured(width, height int, img image.Image, samples int) im
 	return best
 }
 
+// TextureScore estimates how "busy" a crop is via downsampled luminance variance.
+func TextureScore(img image.Image, x0, y0, w, h int) float64 {
+	return cropTextureScore(img, x0, y0, w, h)
+}
+
 // cropTextureScore estimates how "busy" a crop is via downsampled luminance variance.
 func cropTextureScore(img image.Image, x0, y0, w, h int) float64 {
 	const step = 3

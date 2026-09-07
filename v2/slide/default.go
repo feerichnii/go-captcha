@@ -17,9 +17,8 @@ func defaultOptions() Option {
 		opts.imageAlpha = 1
 		opts.enableGraphVerticalRandom = false
 
-		// Three drop slots: identical silhouette at different positions;
-		// only one position matches the tile's background crop.
-		opts.genGraphNumber = 3
+		// 0 = auto: random 4–7 drop slots (identical silhouette; one correct).
+		opts.genGraphNumber = 0
 		opts.rangeGraphAnglePos = []*option.RangeVal{
 			{Min: -8, Max: 8},
 		}

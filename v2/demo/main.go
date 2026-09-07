@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -26,7 +27,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	layer, err := antibot.New(antibot.NewMemoryStore(), antibot.Config{
+	cfg := antibot.Config{
 		SecretKey:     secret,
 		TTL:           2 * time.Minute,
 		PoWProbeProb:  -1, // quieter demo
@@ -34,10 +35,13 @@ func main() {
 		MinSolveTime:  200 * time.Millisecond,
 		// Demo still sends piece_down for slide; rotate uses the angle track.
 		AllowMissingPiecePress: false,
-	})
+		// TrustedProxies empty → RemoteAddr only (spoofed XFF ignored).
+	}
+	layer, err := antibot.New(antibot.NewMemoryStore(), cfg)
 	if err != nil {
 		log.Fatal(err)
 	}
+	trustedProxies := cfg.TrustedProxies
 
 	bgs, err := loadBackgrounds()
 	if err != nil {
@@ -82,7 +86,7 @@ func main() {
 			http.Error(w, "session", 500)
 			return
 		}
-		signals := antibot.SignalsFromRequest(r, sess)
+		signals := antibot.SignalsFromRequestTrusted(r, sess, trustedProxies)
 
 		var (
 			kind    string
@@ -155,7 +159,7 @@ func main() {
 			http.Error(w, "session", 500)
 			return
 		}
-		signals := antibot.SignalsFromRequest(r, sess)
+		signals := antibot.SignalsFromRequestTrusted(r, sess, trustedProxies)
 
 		var in struct {
 			ID         string                 `json:"id"`
@@ -198,14 +202,30 @@ func writeJSON(w http.ResponseWriter, v any) {
 }
 
 func writeErr(w http.ResponseWriter, err error) {
+	retry := antibot.RetryAfterMs(err)
+	code := http.StatusInternalServerError
+	msg := "captcha unavailable"
 	switch {
-	case err == antibot.ErrRateLimited:
-		http.Error(w, "too many requests", http.StatusTooManyRequests)
+	case errors.Is(err, antibot.ErrRateLimited):
+		code = http.StatusTooManyRequests
+		msg = "too many requests"
+	case errors.Is(err, antibot.ErrLocked):
+		code = http.StatusForbidden
+		msg = "locked"
+	case errors.Is(err, antibot.ErrBadAnswer):
+		code = http.StatusForbidden
+		msg = "bad_answer"
 	case antibot.IsClientError(err):
-		http.Error(w, "captcha failed: "+err.Error(), http.StatusForbidden)
-	default:
-		http.Error(w, "captcha unavailable: "+err.Error(), http.StatusInternalServerError)
+		code = http.StatusForbidden
+		msg = "captcha failed"
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	out := map[string]any{"error": msg, "detail": err.Error()}
+	if retry > 0 {
+		out["retry_after_ms"] = retry
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 func mustWD() string {
