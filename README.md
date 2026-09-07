@@ -29,7 +29,7 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 
 - **Safer-by-default answers** — `GetPublicData()` returns everything the browser needs and nothing it shouldn't. The real answer (`GetData()`) never has to leave the server, and can be encrypted at rest (AES-256-GCM) by the `antibot` layer or sealed into an opaque AEAD token via [`v2/base/challenge`](v2/base/challenge).
 - **Anti-solver image & RNG hardening** — answer geometry now uses `crypto/rand`, JPEG masters ship with added interference noise, slide tiles get multiple identical-silhouette decoy slots, and rotate masters get rim noise. See [SECURITY.md](SECURITY.md).
-- **The `antibot` layer** — a drop-in orchestration package ([`v2/antibot`](v2/antibot)) that manages the challenge lifecycle (crypto ID, TTL, single-use, attempt caps), scores pointer trajectories, rate-limits per client, and issues adaptive proof-of-work to suspicious clients. Backed by in-memory or Redis storage.
+- **The `antibot` layer** — a drop-in orchestration package ([`v2/antibot`](v2/antibot)) that manages the challenge lifecycle (crypto ID, TTL, **one-shot geometry**), scores pointer trajectories, multi-bucket rate-limits, IP freeze/epoch, bound PoW/JS, and adaptive friction. Backed by in-memory or Redis storage.
 - **Bundled readable backgrounds** — landmark-rich scenes under [`v2/resources/backgrounds`](v2/resources/backgrounds) so humans can align the slide tile by eye while bots still face multiple identical notches.
 
 | Capability            | Upstream | AntiBot Edition |
@@ -39,7 +39,7 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 | Crypto RNG for answers        | –  | ✅ |
 | Image interference / decoys   | –  | ✅ |
 | Encrypted answers / AEAD tokens | –  | ✅ AES-256-GCM |
-| Atomic single-use + attempts   | –  | ✅ `Incr` / `GETDEL` |
+| Atomic one-shot geometry       | –  | ✅ claim + freeze / epoch |
 | Client binding + verify limits | –  | ✅ |
 | Challenge lifecycle manager    | –  | ✅ `antibot` |
 | Trajectory behavior scoring    | –  | ✅ |
@@ -453,18 +453,18 @@ func loadPng(p string) (image.Image, error) {
 
 ## 🛡 AntiBot layer
 
-The [`v2/antibot`](v2/antibot) package wraps CAPTCHA generation and verification with a full anti-automation pipeline, so answers stay on the server and suspicious clients get extra friction.
+The [`v2/antibot`](v2/antibot) package wraps CAPTCHA generation and verification with a full anti-automation pipeline: answers stay on the server, **one visual challenge = one geometry attempt**, tech failures do not consume the challenge, and abuse identity is primarily exact IPv4 `/32` (freeze + epoch) plus session binding.
 
 ```
 AntiBot layer
-├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, atomic attempts (3), atomic single-use
-├── Answer storage      AES-256-GCM bound to challenge id — never plaintext, never sent to client
-├── Client binding      challenge usable only by the session/client that requested it
-├── Trajectory scoring  duration, velocity, acceleration, timing, corrections → risk signal
-├── Rate Limiter        per client key, on Issue and Verify
-├── Server-side timing  MinSolveTime, trajectory-vs-elapsed consistency, input size caps
-├── Adaptive PoW        persistent per-client risk level → difficulty escalation
-└── Browser client      client/antibot-client.js: trajectory tracker + Web Worker PoW solver
+├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, one-shot geometry (no MaxAttempts)
+├── IP epoch + active   single live challenge per /32; bad answer invalidates prefetch
+├── Answer storage      AES-256-GCM bound to challenge id — never sent to client
+├── Binding + freeze    session + HMAC /32; escalating cooldown 2s→5s→15s→60s→300s
+├── Bound PoW / JS      challenge+session-bound PoW; rotating JS workloads
+├── Trajectory scoring  intervals, dynamics, PointerEvent meta → risk (not proof)
+├── Rate limits         hard: session+/32/global; soft: /24+ASN → risk only
+└── Browser client      client/antibot-client.js + optional React/Vue helpers
 ```
 
 ### Quick start
@@ -479,36 +479,40 @@ import (
     "github.com/redis/go-redis/v9"
 )
 
+secret := []byte(os.Getenv("CAPTCHA_SECRET")) // >= 32 high-entropy bytes
 rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 layer, err := antibot.New(antibot.NewRedisStore(rdb), antibot.Config{
-    SecretKey:   []byte(os.Getenv("CAPTCHA_SECRET")), // required
-    TTL:         90 * time.Second,
-    MaxAttempts: 3,
+    SecretKey:  secret,
+    TTL:        90 * time.Second,
+    GeoLockTTL: 5 * time.Second,
 })
 
-// After slide.Generate():
+sess, _, _ := antibot.EnsureSessionCookie(w, r, secret, antibot.DefaultSessionCookie, antibot.DefaultSessionTTL)
+signals := antibot.SignalsFromRequestTrusted(r, sess, nil)
+
 answer, _ := json.Marshal(captData.GetData()) // secret; encrypted at rest
 iss, err := layer.Issue(ctx, antibot.IssueRequest{
     Kind:      antibot.KindSlide,
     Answer:    answer,
-    ClientKey: sessionID, // same key must be used at Verify
+    ClientKey: sess.ClientKey,
+    Signals:   signals, // authoritative IP required
 })
-// Client gets: iss.ID, captData.GetPublicData(), images, iss.PoW (when the client is risky)
+// Client gets: iss.ID, GetPublicData(), images, iss.PoW?, iss.JSChallenge
 
 res, err := layer.Verify(ctx, antibot.VerifyRequest{
     ID:         iss.ID,
-    ClientKey:  sessionID,
+    ClientKey:  sess.ClientKey,
+    Signals:    signals,
+    Browser:    browserFromJSON, // js_challenge_response when browser required
     Answer:     mustJSON(antibot.SlideSubmit{X: ux, Y: uy}),
-    Trajectory: antibot.Trajectory{Points: points, Events: events},
+    Trajectory: antibot.Trajectory{Points: points, Events: events, PieceDown: pieceDown},
     PoWNonce:   nonce, // required if iss.PoW != nil
 })
-// res.Score is a risk signal, not proof of humanity; res.RequirePoWNext tells you the next issue carries PoW
+// Tech fail → challenge kept; wrong geometry → freeze + retry_after_ms; score is a risk signal
 ```
 
-> Never send `GetData()` / the stored `Answer` to the browser — only `GetPublicData()`, images and `PoW{salt,difficulty}`.
-> Browser side: [`v2/antibot/client`](v2/antibot/client). HTTP handlers: [`example_http_test.go`](v2/antibot/example_http_test.go).
-
-See [`v2/antibot/README.md`](v2/antibot/README.md) for the full API, Redis wiring, and scoring details.
+> Never send `GetData()` / stored `Answer` to the browser.  
+> Full decision tree, delays/TTLs, and hard vs soft checks: **[`v2/antibot/README.md`](v2/antibot/README.md)**.
 
 <br/>
 <hr/>
@@ -547,7 +551,7 @@ Bot resistance depends on how you wire the library into your app. The essentials
 
 1. **Never return `GetData()` to clients** — use `GetPublicData()` in API responses, and hand the answer to `antibot.Issue` (encrypted at rest) or seal it with `challenge.Seal` (AEAD).
 2. **Expire and single-use challenges** — short TTLs, delete after first successful verify.
-3. **Cap attempts and rate-limit** — the [`antibot`](v2/antibot) layer does both out of the box.
+3. **One-shot geometry + rate-limit + IP freeze** — the [`antibot`](v2/antibot) layer does this out of the box (see its README for delays/TTLs).
 4. **Use diverse assets** — many backgrounds/graphics make solver training harder.
 
 Full details and the rationale behind every hardening change live in [SECURITY.md](SECURITY.md).

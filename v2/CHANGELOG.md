@@ -4,6 +4,10 @@ All notable changes to go-captcha v2 (AntiBot + captcha packages) are documented
 
 ## Unreleased
 
+### Docs
+- Expand `v2/antibot/README.md`: decision flow, hard vs soft checks, delays/TTLs, risk/PoW
+- Sync root `README.md` AntiBot section (drop MaxAttempts=3 / attempt-caps wording)
+
 ### AntiBot P3
 - Optional soft fingerprints (`canvas_hash` / `webgl_hash` / `audio_hash`) — risk only, never required
 - `PrivacyHash` + `GenerateSecretKey` / `MustReadCrypto` helpers
