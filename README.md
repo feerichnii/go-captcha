@@ -9,8 +9,6 @@
 
 <br/>
 
-> English | [中文](README_zh.md)
-
 <p align="center">
 <b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides three interactive CAPTCHA types (<b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, AEAD-encrypted challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
 </p>
