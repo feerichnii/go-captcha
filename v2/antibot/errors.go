@@ -12,8 +12,11 @@ var (
 	ErrTooFast        = errors.New("antibot: solved faster than MinSolveTime")
 	ErrInvalidRequest = errors.New("antibot: invalid request")
 	ErrNoSecretKey    = errors.New("antibot: Config.SecretKey is required")
-	ErrStore          = errors.New("antibot: store failure")
-	ErrBadTrajectory  = errors.New("antibot: trajectory failed structural checks")
+	ErrStore             = errors.New("antibot: store failure")
+	ErrBadTrajectory     = errors.New("antibot: trajectory failed structural checks")
+	ErrJSChallengeFailed = errors.New("antibot: JS / DOM challenge failed")
+	ErrBrowserRequired   = errors.New("antibot: browser attestation required")
+	ErrPiecePressRequired = errors.New("antibot: puzzle piece press required before drag")
 )
 
 // IsClientError reports whether err should be shown to the end user as a
@@ -31,7 +34,10 @@ func IsClientError(err error) bool {
 		errors.Is(err, ErrClientKeyLooksLikeIP),
 		errors.Is(err, ErrBadSession),
 		errors.Is(err, ErrBadTrajectory),
-		errors.Is(err, ErrWeakSecretKey):
+		errors.Is(err, ErrWeakSecretKey),
+		errors.Is(err, ErrJSChallengeFailed),
+		errors.Is(err, ErrBrowserRequired),
+		errors.Is(err, ErrPiecePressRequired):
 		return true
 	}
 	return false

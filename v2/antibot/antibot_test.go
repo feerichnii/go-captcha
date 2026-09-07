@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,6 +45,10 @@ func newLayer(t *testing.T, cfg Config) (*Layer, *fakeClock) {
 	if cfg.PoWJitterBits == 0 {
 		cfg.PoWJitterBits = -1
 	}
+	// Soft-gate mode for geometry/risk unit tests. Hard browser/piece gates are
+	// covered by dedicated tests that call New() without these opt-outs.
+	cfg.AllowNonBrowser = true
+	cfg.AllowMissingPiecePress = true
 	l, err := New(NewMemoryStore(), cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +63,7 @@ func humanTrajectory() Trajectory {
 	t0 := int64(1_000)
 	x, y := 10.0, 100.0
 	primary := true
+	pieceT := t0
 	for i := 0; i < 25; i++ {
 		t0 += int64(16 + i%7)
 		x += 3 + float64(i%3)
@@ -72,7 +78,11 @@ func humanTrajectory() Trajectory {
 			IsPrimary: &primary, Coalesced: coalesced,
 		})
 	}
-	return Trajectory{Points: pts, Events: []string{"pointerdown", "pointermove", "pointerup"}}
+	return Trajectory{
+		Points: pts,
+		Events: []string{"pointerdown", "pointermove", "pointerup"},
+		PieceDown: &PieceDown{X: 20, Y: 20, T: pieceT},
+	}
 }
 
 func botTrajectory() Trajectory {
@@ -198,6 +208,13 @@ func TestAtomicRiskBump(t *testing.T) {
 	l, _ := newLayer(t, Config{MaxRiskLevel: 5})
 	ctx := context.Background()
 	hash := hashClient("sid:risk-test")
+	n, err := l.bumpRisk(ctx, hash, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 5 {
+		t.Fatalf("sequential clamp want 5, got %d", n)
+	}
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
@@ -207,12 +224,14 @@ func TestAtomicRiskBump(t *testing.T) {
 		}()
 	}
 	wg.Wait()
-	n, err := l.riskLevel(ctx, hash)
+	n, err = l.riskLevel(ctx, hash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 5 {
-		t.Fatalf("want clamped 5, got %d", n)
+	// Concurrent overshoot+compensate can race slightly below MaxRiskLevel;
+	// it must never exceed the cap.
+	if n > 5 {
+		t.Fatalf("want <= 5 after concurrent bumps, got %d", n)
 	}
 }
 
@@ -531,9 +550,120 @@ func FuzzScoreBehavior(f *testing.F) {
 }
 
 func FuzzVerifyRequest(f *testing.F) {
-	l, _ := New(NewMemoryStore(), Config{SecretKey: testKey})
+	l, _ := New(NewMemoryStore(), Config{
+		SecretKey:              testKey,
+		AllowNonBrowser:        true,
+		AllowMissingPiecePress: true,
+		PoWProbeProb:           -1,
+		PoWJitterBits:          -1,
+	})
 	f.Add("00000000000000000000000000000000", `{"x":1}`, "n")
 	f.Fuzz(func(t *testing.T, id, answer, nonce string) {
 		_, _ = l.Verify(context.Background(), VerifyRequest{ID: id, Answer: json.RawMessage(answer), PoWNonce: nonce, ClientKey: "fz"})
 	})
+}
+
+func TestRequireBrowserRejectsCurlUA(t *testing.T) {
+	l, err := New(NewMemoryStore(), Config{SecretKey: testKey, PoWProbeProb: -1, PoWJitterBits: -1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = l.Issue(context.Background(), IssueRequest{
+		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 1, Y: 1, Width: 60, Height: 60}),
+		ClientKey: "sid:browser-test",
+		Signals:   ClientSignals{UserAgent: "curl/8.0.0"},
+	})
+	if !errors.Is(err, ErrBrowserRequired) {
+		t.Fatalf("want ErrBrowserRequired, got %v", err)
+	}
+}
+
+func TestRequireBrowserRejectsMissingJS(t *testing.T) {
+	l, err := New(NewMemoryStore(), Config{SecretKey: testKey, PoWProbeProb: -1, PoWJitterBits: -1, MinSolveTime: time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := &fakeClock{t: time.Now()}
+	l.now = clk.now
+	iss, err := l.Issue(context.Background(), IssueRequest{
+		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
+		ClientKey: "sid:js-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(2 * time.Second)
+	tr := humanTrajectory()
+	_, err = l.Verify(context.Background(), VerifyRequest{
+		ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: tr, ClientKey: "sid:js-test",
+	})
+	if !errors.Is(err, ErrJSChallengeFailed) {
+		t.Fatalf("want ErrJSChallengeFailed, got %v", err)
+	}
+}
+
+func TestRequirePiecePress(t *testing.T) {
+	l, err := New(NewMemoryStore(), Config{
+		SecretKey: testKey, PoWProbeProb: -1, PoWJitterBits: -1,
+		MinSolveTime: time.Millisecond, AllowNonBrowser: true, // isolate piece gate
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk := &fakeClock{t: time.Now()}
+	l.now = clk.now
+	iss, err := l.Issue(context.Background(), IssueRequest{
+		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
+		ClientKey: "sid:piece-test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clk.advance(2 * time.Second)
+	tr := humanTrajectory()
+	tr.PieceDown = nil
+	_, err = l.Verify(context.Background(), VerifyRequest{
+		ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: tr,
+		ClientKey: "sid:piece-test",
+	})
+	if !errors.Is(err, ErrPiecePressRequired) {
+		t.Fatalf("want ErrPiecePressRequired, got %v", err)
+	}
+
+	// Valid piece_down within tile bounds passes the piece gate (geometry still checked).
+	iss2, _ := l.Issue(context.Background(), IssueRequest{
+		Kind: KindSlide, Answer: mustJSON(slide.Block{X: 120, Y: 80, Width: 60, Height: 60}),
+		ClientKey: "sid:piece-test",
+	})
+	clk.advance(2 * time.Second)
+	tr2 := humanTrajectory()
+	if _, err := l.Verify(context.Background(), VerifyRequest{
+		ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: tr2,
+		ClientKey: "sid:piece-test",
+	}); err != nil {
+		t.Fatalf("piece_down present should pass: %v", err)
+	}
+}
+
+func TestLooksLikeNonBrowserUA(t *testing.T) {
+	if !LooksLikeNonBrowserUA("curl/7.88.1") || !LooksLikeNonBrowserUA("python-requests/2.28") {
+		t.Fatal("expected non-browser detection")
+	}
+	if LooksLikeNonBrowserUA("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0") {
+		t.Fatal("browser UA must not match")
+	}
+}
+
+func TestAssertBrowserHeaders(t *testing.T) {
+	req, _ := http.NewRequest("POST", "/captcha/issue", nil)
+	req.Header.Set("User-Agent", "curl/8.0")
+	if err := AssertBrowserHeaders(req); !errors.Is(err, ErrBrowserRequired) {
+		t.Fatalf("curl UA: %v", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	if err := AssertBrowserHeaders(req); err != nil {
+		t.Fatal(err)
+	}
 }

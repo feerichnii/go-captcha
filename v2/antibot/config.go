@@ -90,12 +90,30 @@ type Config struct {
 	// Negative disables jitter.
 	PoWJitterBits int
 
+	// AllowNonBrowser opts out of hard browser gates (default false = browser required).
+	// When false (default): Verify hard-fails without a valid JS challenge response,
+	// and Issue/Verify reject known non-browser User-Agents (curl, wget, …).
+	AllowNonBrowser bool
+	// AllowMissingPiecePress opts out of hard piece_down checks (default false).
+	// When false (default): slide/rotate Verify requires Trajectory.PieceDown
+	// (checkbox-analog: user must press the tile/knob before dragging).
+	AllowMissingPiecePress bool
+	// MinPiecePressDwellMs is the minimum time from piece_down to the first
+	// subsequent move point (default 16). 0 disables the dwell check.
+	MinPiecePressDwellMs int64
+
 	// Telemetry receives issue/verify events (default NoopTelemetry).
 	Telemetry Telemetry
 
 	// KeyPrefix for store keys (default "gocaptcha:antibot:").
 	KeyPrefix string
 }
+
+// RequireBrowser reports whether hard JS/UA gates are active.
+func (c Config) RequireBrowser() bool { return !c.AllowNonBrowser }
+
+// RequirePiecePress reports whether slide/rotate must include piece_down.
+func (c Config) RequirePiecePress() bool { return !c.AllowMissingPiecePress }
 
 func (c *Config) withDefaults() Config {
 	out := *c
@@ -174,6 +192,11 @@ func (c *Config) withDefaults() Config {
 	}
 	if out.KeyPrefix == "" {
 		out.KeyPrefix = "gocaptcha:antibot:"
+	}
+	if c.MinPiecePressDwellMs == 0 {
+		out.MinPiecePressDwellMs = 16
+	} else if c.MinPiecePressDwellMs < 0 {
+		out.MinPiecePressDwellMs = 0
 	}
 	return out
 }

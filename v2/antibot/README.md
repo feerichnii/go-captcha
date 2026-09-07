@@ -8,8 +8,9 @@ AntiBot layer
 ├── Answer storage      AES-256-GCM, bound to challenge id — never plaintext, never sent to client
 ├── Session binding     server-issued cookie (sid:…) as ClientKey — never IP:port
 ├── Client signals      IP / UA / ASN / session age as risk inputs only
+├── Browser gate        hard JS challenge + non-browser UA reject (curl/wget/…) — opt out AllowNonBrowser
+├── Piece press         slide/rotate require piece_down (checkbox analog) — opt out AllowMissingPiecePress
 ├── Trajectory scoring  order, monotonic t, jumps, PointerEvent meta, coalesced → RISK signal
-├── Browser signals     webdriver/headless hints + DOM/JS challenge
 ├── Rate Limiter        per client key, on Issue AND Verify
 ├── Server-side timing  MinSolveTime, trajectory-vs-elapsed consistency, input size caps
 ├── Adaptive PoW        risk level → difficulty + probe PoW + jitter (MaxRiskLevel reaches PoWMax)
@@ -57,12 +58,28 @@ res, err := layer.Verify(ctx, antibot.VerifyRequest{
     ID:         iss.ID,
     ClientKey:  sess.ClientKey,
     Signals:    signals,
-    Browser:    browserFromJSON, // webdriver / js_challenge_response / …
+    Browser:    browserFromJSON, // must include js_challenge_response
     Answer:     mustJSON(antibot.SlideSubmit{X: ux, Y: uy}),
-    Trajectory: antibot.Trajectory{Points: points, Events: events},
+    Trajectory: antibot.Trajectory{Points: points, Events: events, PieceDown: pieceDown},
     PoWNonce:   nonce, // required if iss.PoW != nil
 })
 ```
+
+### Browser gate (anti-curl)
+
+By default (`RequireBrowser()` = true):
+
+- Issue/Verify reject known non-browser User-Agents (`curl`, `wget`, `python-requests`, …) → `ErrBrowserRequired`
+- Verify hard-fails without a valid `JSChallenge` response → `ErrJSChallengeFailed`
+- HTTP handlers should also call `AssertBrowserHeaders(r)` (Sec-Fetch-Mode / Accept)
+
+Opt out for non-browser integrations: `Config{AllowNonBrowser: true}`.
+
+### Piece press (checkbox analog)
+
+For slide/rotate, the client must press the **movable tile/knob** before dragging. Send `trajectory.piece_down: {x,y,t}` (coords relative to the piece). Missing/out-of-bounds/too-fast → `ErrPiecePressRequired`.
+
+Opt out: `Config{AllowMissingPiecePress: true}`.
 
 ### SecretKey
 
@@ -80,7 +97,7 @@ Use a **server-side session id** (`MintSession` / `EnsureSessionCookie` → `sid
 
 The trajectory is client-supplied and can be fabricated or replayed. Therefore:
 
-- geometry (+ PoW when required) is the gate;
+- geometry + JS challenge + piece press (+ PoW when required) are the hard gates;
 - trajectory validation checks `down → move → up`, monotonic timestamps, jump size, final-point proximity, and PointerEvent fields;
 - the score and browser signals move the client's **persistent risk level** (atomic Redis/`IncrBy` counter);
 - risk also rises on high fail-rate, high issue frequency, young sessions, and UA/headless hints;
@@ -92,7 +109,11 @@ Calibrate before tightening: feed `VerifyEvent.Score` with your own human/bot la
 
 ## Browser side
 
-[`client/antibot-client.js`](client/) records PointerEvent metadata + coalesced events, collects browser signals, solves the JS challenge and PoW, then posts the verify payload. HTTP handler example: [`example_http_test.go`](example_http_test.go).
+[`client/antibot-client.js`](client/) records PointerEvent metadata + coalesced events, requires a press on `pieceEl` (tile) before drag, collects browser signals, solves the JS challenge and PoW, then posts the verify payload. HTTP handler example: [`example_http_test.go`](example_http_test.go).
+
+```js
+const tracker = new TrajectoryTracker(trackEl, { pieceEl: tileEl }).start();
+```
 
 PoW contract: `sha256(salt + ":" + nonce)` must have `difficulty` leading zero bits; nonce ≤ `MaxNonceLen` (64) bytes.
 

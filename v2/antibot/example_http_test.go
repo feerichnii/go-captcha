@@ -29,6 +29,10 @@ func Example_httpHandlers() {
 	capt := builder.Make()
 
 	http.HandleFunc("/captcha/issue", func(w http.ResponseWriter, r *http.Request) {
+		if err := antibot.AssertBrowserHeaders(r); err != nil {
+			writeErr(w, err)
+			return
+		}
 		sess, _, err := antibot.EnsureSessionCookie(w, r, secret, antibot.DefaultSessionCookie, antibot.DefaultSessionTTL)
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusInternalServerError)
@@ -67,6 +71,10 @@ func Example_httpHandlers() {
 	})
 
 	http.HandleFunc("/captcha/verify", func(w http.ResponseWriter, r *http.Request) {
+		if err := antibot.AssertBrowserHeaders(r); err != nil {
+			writeErr(w, err)
+			return
+		}
 		sess, _, err := antibot.EnsureSessionCookie(w, r, secret, antibot.DefaultSessionCookie, antibot.DefaultSessionTTL)
 		if err != nil {
 			http.Error(w, "session unavailable", http.StatusInternalServerError)

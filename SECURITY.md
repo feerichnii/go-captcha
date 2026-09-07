@@ -21,7 +21,9 @@ If you need a stateless token instead of a store, `challenge.Seal`/`Open` produc
 - Atomic attempt counter (`Incr`) and atomic risk counter (`IncrBy`); atomic consume (`GetDel`).
 - Challenge bound to the issuing session; rate limits on both Issue and Verify.
 - Trajectory validation: event order, monotonic timestamps, jump size, final-point check, PointerEvent fields / coalesced events.
-- Browser signals: webdriver/headless hints + DOM/JS challenge; fail-rate / issue-frequency / session age feed the risk engine.
+- **Browser gate (default on):** valid JS/`DOM` challenge required; known non-browser UAs (`curl`, …) rejected. Opt out with `AllowNonBrowser`. Use `AssertBrowserHeaders` in HTTP handlers.
+- **Piece press (default on for slide/rotate):** `trajectory.piece_down` required (press on tile/knob before drag). Opt out with `AllowMissingPiecePress`.
+- Soft browser signals (webdriver/headless) + fail-rate / issue-frequency / session age still feed the risk engine.
 - Adaptive PoW with probe probability + jitter; `MaxRiskLevel` is derived so `PoWMaxDifficulty` is reachable.
 - Behavior score is a **risk signal** — not a proof of humanity. See [v2/antibot/README.md](v2/antibot/README.md).
 
@@ -40,7 +42,8 @@ If you need a stateless token instead of a store, `challenge.Seal`/`Open` produc
 3. Show a single generic failure to users; log the typed error (`antibot.IsClientError`).
 4. Diverse assets: many backgrounds / fonts / graphs; small fixed asset sets help solvers.
 5. Calibrate `RiskThreshold` on your own traffic before enabling `HardRejectScore`.
-6. Keep the bundled JS client (`antibot-client.js`) so PointerEvent meta, coalesced events and the JS challenge are actually sent.
+6. Keep the bundled JS client (`antibot-client.js`) so PointerEvent meta, coalesced events, JS challenge and `pieceEl` press are actually sent.
+7. Call `AssertBrowserHeaders` on Issue/Verify HTTP handlers to reject bare curl.
 ## Out of scope
 
 HTTP/gRPC transport, WAF, ML risk models — wire those in your app or [go-captcha-service](https://github.com/wenlng/go-captcha-service).

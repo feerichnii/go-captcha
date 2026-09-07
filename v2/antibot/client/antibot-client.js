@@ -31,27 +31,32 @@ const UP_EVENTS = ["pointerup", "mouseup", "touchend", "pointercancel", "touchca
  */
 export class TrajectoryTracker {
   /**
-   * @param {HTMLElement} el          element to attach listeners to
+   * @param {HTMLElement} el          track / master element for move/up
    * @param {object}      [opts]
+   * @param {HTMLElement} [opts.pieceEl]  movable tile/knob — press here first (checkbox analog)
    * @param {number}      [opts.maxPoints=1500]
    * @param {number}      [opts.maxEvents=400]
    * @param {number}      [opts.minIntervalMs=8]  drop moves closer than this
-   * @param {boolean}     [opts.relative=true]    coordinates relative to el
+   * @param {boolean}     [opts.relative=true]    coordinates relative to el (moves)
    */
   constructor(el, opts = {}) {
     this.el = el;
+    this.pieceEl = opts.pieceEl || null;
     this.maxPoints = opts.maxPoints ?? 1500;
     this.maxEvents = opts.maxEvents ?? 400;
     this.minIntervalMs = opts.minIntervalMs ?? 8;
     this.relative = opts.relative ?? true;
     this.reset();
     this._onEvent = this._onEvent.bind(this);
+    this._onPieceDown = this._onPieceDown.bind(this);
     this._attached = false;
   }
 
   reset() {
     this.points = [];
     this.events = [];
+    this.piece_down = null;
+    this._armed = !this.pieceEl; // without pieceEl, behave as before
     this._lastMoveT = -Infinity;
     this._coalescedTotal = 0;
   }
@@ -65,6 +70,12 @@ export class TrajectoryTracker {
       : ["mousedown", "mousemove", "mouseup", "touchstart", "touchmove", "touchend", "touchcancel"];
     this._names = names;
     for (const n of names) this.el.addEventListener(n, this._onEvent, { passive: true });
+    if (this.pieceEl) {
+      this._pieceNames = supportsPointer ? ["pointerdown"] : ["mousedown", "touchstart"];
+      for (const n of this._pieceNames) this.pieceEl.addEventListener(n, this._onPieceDown, { passive: true });
+    } else {
+      this._pieceNames = [];
+    }
     this._attached = true;
     return this;
   }
@@ -72,20 +83,25 @@ export class TrajectoryTracker {
   stop() {
     if (!this._attached) return this;
     for (const n of this._names) this.el.removeEventListener(n, this._onEvent);
+    if (this.pieceEl) {
+      for (const n of this._pieceNames) this.pieceEl.removeEventListener(n, this._onPieceDown);
+    }
     this._attached = false;
     return this;
   }
 
-  /** @returns {{points: object[], events: string[], coalesced_total: number}} */
+  /** @returns {{points: object[], events: string[], piece_down?: object, coalesced_total: number}} */
   snapshot() {
-    return {
+    const out = {
       points: this.points.slice(),
       events: this.events.slice(),
       coalesced_total: this._coalescedTotal,
     };
+    if (this.piece_down) out.piece_down = { ...this.piece_down };
+    return out;
   }
 
-  _coords(e) {
+  _coordsOn(el, e) {
     let x, y;
     if (e.touches && e.touches.length) {
       x = e.touches[0].clientX;
@@ -97,12 +113,16 @@ export class TrajectoryTracker {
       x = e.clientX;
       y = e.clientY;
     }
-    if (this.relative && this.el.getBoundingClientRect) {
-      const r = this.el.getBoundingClientRect();
+    if (this.relative && el.getBoundingClientRect) {
+      const r = el.getBoundingClientRect();
       x -= r.left;
       y -= r.top;
     }
     return { x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 };
+  }
+
+  _coords(e) {
+    return this._coordsOn(this.el, e);
   }
 
   _pointerMeta(e) {
@@ -124,11 +144,29 @@ export class TrajectoryTracker {
     return meta;
   }
 
-  _onEvent(e) {
+  _onPieceDown(e) {
     const t = Math.round(nowMs());
+    const { x, y } = this._coordsOn(this.pieceEl, e);
+    this.piece_down = { x, y, t };
+    this._armed = true;
+    if (this.events.length < this.maxEvents) this.events.push(e.type);
+    if (this.points.length < this.maxPoints) {
+      // Also record a track-relative point so down→move→up stays consistent.
+      const track = this._coords(e);
+      this.points.push({ ...track, t, ...this._pointerMeta(e) });
+    }
+  }
+
+  _onEvent(e) {
     const type = e.type;
+    const isDown = DOWN_EVENTS.includes(type);
     const isMove = MOVE_EVENTS.includes(type);
 
+    // When pieceEl is set, ignore track downs — arming happens on the piece.
+    if (this.pieceEl && isDown) return;
+    if (!this._armed) return;
+
+    const t = Math.round(nowMs());
     if (isMove && t - this._lastMoveT < this.minIntervalMs) return;
     if (isMove) this._lastMoveT = t;
 
@@ -422,6 +460,7 @@ export class AntiBotClient {
       trajectory: {
         points: trajectory?.points ?? [],
         events: trajectory?.events ?? [],
+        piece_down: trajectory?.piece_down,
       },
       pow_nonce,
       browser,
