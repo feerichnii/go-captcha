@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GoCaptcha · AntiBot</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="hero">
+    <h1>GoCaptcha · AntiBot</h1>
+    <p>Rotate, Slide и Drag-Drop на feerichnii/go-captcha с фонами bg_*.</p>
+  </header>
+
+  <main class="grid">
+    <section class="card" data-kind="rotate">
+      <div class="badge">ROTATE</div>
+      <div class="stage" id="rotate-stage">
+        <img class="master" alt="" />
+        <img class="thumb" alt="" />
+      </div>
+      <input class="track" type="range" min="0" max="360" value="0" />
+      <div class="actions">
+        <button type="button" class="btn refresh">Обновить</button>
+        <button type="button" class="btn verify primary">Проверить</button>
+      </div>
+      <p class="hint">Зажми круг и крути ползунок</p>
+      <p class="status"></p>
+    </section>
+
+    <section class="card" data-kind="slide">
+      <div class="badge">SLIDE</div>
+      <div class="stage" id="slide-stage">
+        <img class="master" alt="" />
+        <img class="tile" alt="" draggable="false" />
+      </div>
+      <!-- Horizontal slider moves the tile (ModeBasic, fixed Y) -->
+      <input class="track" type="range" min="0" max="100" value="0" />
+      <div class="actions">
+        <button type="button" class="btn refresh">Обновить</button>
+        <button type="button" class="btn verify primary">Проверить</button>
+      </div>
+      <p class="hint">Двигай пазл ползунком влево-вправо до прорези</p>
+      <p class="status"></p>
+    </section>
+
+    <section class="card" data-kind="drag">
+      <div class="badge">DRAG-DROP</div>
+      <div class="stage" id="drag-stage">
+        <img class="master" alt="" />
+        <img class="tile" alt="" draggable="false" />
+      </div>
+      <div class="actions">
+        <button type="button" class="btn refresh">Обновить</button>
+        <button type="button" class="btn verify primary">Проверить</button>
+      </div>
+      <p class="hint">Перетащи пазл в нужную прорезь</p>
+      <p class="status"></p>
+    </section>
+  </main>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
