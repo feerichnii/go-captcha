@@ -261,7 +261,7 @@ func loadPng(p string) (image.Image, error) {
 | slide.WithImageAlpha(float32)                                  | Set main image transparency                    |
 | slide.WithRangeGraphSize(val option.RangeVal)                  | Set range for random graphic size              |
 | slide.WithRangeGraphAnglePos([]option.RangeVal)                | Set range for random graphic angles            |
-| slide.WithGenGraphNumber(val int)                              | Set number of graphics                         |
+| slide.WithGenGraphNumber(val int)                              | Number of drop slots on the master (default **3**: 1 correct + decoys). Prefer ≥2 distinct `GraphImage`s so decoy notches differ from the tile. |
 | slide.WithEnableGraphVerticalRandom(val bool)                  | Enable/disable random vertical graphic sorting |
 | slide.WithRangeDeadZoneDirections(val []DeadZoneDirectionType) | Set dead zone directions for puzzle pieces     |
 

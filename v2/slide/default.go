@@ -22,7 +22,8 @@ func defaultOptions() Option {
 			DeadZoneDirectionTypeTop,
 		}
 
-		// Multiple decoy shadows raise template-matching cost.
+		// Three drop slots: one correct notch matching the tile, two decoys
+		// (prefer different shapes when multiple GraphImages are configured).
 		opts.genGraphNumber = 3
 		opts.rangeGraphAnglePos = []*option.RangeVal{
 			{Min: -8, Max: 8},

@@ -64,6 +64,11 @@ func (o *Options) GetRangeGraphSize() *option.RangeVal {
 	}
 }
 
+// GetGenGraphNumber returns how many drop slots are drawn (default 3).
+func (o *Options) GetGenGraphNumber() int {
+	return o.genGraphNumber
+}
+
 // GetRangeDeadZoneDirections .
 func (o *Options) GetRangeDeadZoneDirections() []DeadZoneDirectionType {
 	return o.rangeDeadZoneDirections
@@ -117,11 +122,13 @@ func WithRangeGraphAnglePos(vals []option.RangeVal) Option {
 	}
 }
 
-// WithGenGraphNumber .
+// WithGenGraphNumber sets how many drop slots (notches) are drawn on the master
+// image. Default is 3: one correct + decoys. Only the secret target from
+// GetData() is valid; decoy coordinates are never exposed via GetPublicData().
 func WithGenGraphNumber(val int) Option {
 	return func(opts *Options) {
-		if val <= 1 {
-			opts.genGraphNumber = 1
+		if val < 1 {
+			val = 1
 		}
 		opts.genGraphNumber = val
 	}

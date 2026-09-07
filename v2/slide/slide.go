@@ -107,45 +107,52 @@ func (c *captcha) GetOptions() *Options {
 	return c.opts
 }
 
-// Generate generates slide CAPTCHA data
-// returns:
-//   - CaptchaData: Generated CAPTCHA data
-//   - error: Error information
+// Generate generates slide CAPTCHA data with multiple drop slots (default 3).
+// Only one slot is correct: its shadow matches the tile shape. Other slots are
+// decoys drawn with different shadow shapes when multiple GraphImages are provided.
+// The secret correct (X,Y) is only available via GetData() — never GetPublicData().
 func (c *captcha) Generate() (CaptchaData, error) {
 	if err := c.check(); err != nil {
 		return nil, err
 	}
 
-	overlayImage, shadowImage, maskImage := c.genGraph()
-	if overlayImage == nil || shadowImage == nil || maskImage == nil {
-		return nil, GraphImageErr
+	nSlots := c.opts.genGraphNumber
+	if nSlots < 1 {
+		nSlots = 1
 	}
 
-	blocks, tilePoint := c.genGraphBlocks(c.opts.imageSize, c.opts.rangeGraphSize, c.opts.genGraphNumber)
-	var block *Block
+	blocks, tilePoint := c.genGraphBlocks(c.opts.imageSize, c.opts.rangeGraphSize, nSlots)
+	if len(blocks) == 0 {
+		return nil, GenerateDataErr
+	}
+
+	correctIdx := 0
 	if len(blocks) > 1 {
-		index := helper.RandIndex(len(blocks))
-		if index < 0 {
-			index = 0
+		correctIdx = helper.RandIndex(len(blocks))
+		if correctIdx < 0 {
+			correctIdx = 0
 		}
-		block = blocks[index]
-	} else {
-		block = blocks[0]
 	}
-
+	block := blocks[correctIdx]
 	if block == nil {
 		return nil, GenerateDataErr
 	}
 
-	var masterImage, masterBgImage, tileImage image.Image
-	var err error
+	graphs := c.pickSlotGraphs(len(blocks), correctIdx)
+	if graphs == nil || graphs[correctIdx] == nil {
+		return nil, GraphImageErr
+	}
+	correct := graphs[correctIdx]
+	if correct.OverlayImage == nil || correct.ShadowImage == nil || correct.MaskImage == nil {
+		return nil, GraphImageErr
+	}
 
-	masterImage, masterBgImage, err = c.genMasterImage(c.opts.imageSize, shadowImage, blocks)
+	masterImage, masterBgImage, err := c.genMasterImage(c.opts.imageSize, blocks, graphs)
 	if err != nil {
 		return nil, err
 	}
 
-	tileImage, err = c.genTileImage(maskImage, masterBgImage, overlayImage, block)
+	tileImage, err := c.genTileImage(correct.MaskImage, masterBgImage, correct.OverlayImage, block)
 	if err != nil {
 		return nil, err
 	}
@@ -167,20 +174,54 @@ func (c *captcha) Generate() (CaptchaData, error) {
 	}, nil
 }
 
-// genMasterImage generates the master CAPTCHA image and background image
-// params:
-//   - size: Image size
-//   - shadowImage: Shadow image
-//   - blocks: List of blocks
-//
-// returns:
-//   - image.Image: Master image
-//   - image.Image: Background image
-//   - error: Error information
-func (c *captcha) genMasterImage(size *option.Size, shadowImage image.Image, blocks []*Block) (image.Image, image.Image, error) {
+// pickSlotGraphs assigns a GraphImage per slot. The correct slot gets a randomly
+// chosen graph; other slots prefer different graphs so decoy notches do not
+// match the tile silhouette. Falls back to the correct graph when the pool has
+// only one shape.
+func (c *captcha) pickSlotGraphs(nSlots, correctIdx int) []*GraphImage {
+	pool := c.resources.rangGraphImage
+	if len(pool) == 0 || nSlots <= 0 {
+		return nil
+	}
+	correctPoolIdx := helper.RandIndex(len(pool))
+	if correctPoolIdx < 0 {
+		correctPoolIdx = 0
+	}
+	out := make([]*GraphImage, nSlots)
+	out[correctIdx] = pool[correctPoolIdx]
+
+	decoyIdxs := make([]int, 0, len(pool))
+	for i := range pool {
+		if len(pool) == 1 || i != correctPoolIdx {
+			decoyIdxs = append(decoyIdxs, i)
+		}
+	}
+
+	work := append([]int(nil), decoyIdxs...)
+	for i := 0; i < nSlots; i++ {
+		if i == correctIdx {
+			continue
+		}
+		if len(work) == 0 {
+			work = append([]int(nil), decoyIdxs...)
+		}
+		j := helper.RandIndex(len(work))
+		if j < 0 {
+			j = 0
+		}
+		out[i] = pool[work[j]]
+		work = append(work[:j], work[j+1:]...)
+	}
+	return out
+}
+
+// genMasterImage generates the master CAPTCHA image and background image.
+// Each slot uses graphs[i].ShadowImage so decoys can differ from the tile.
+func (c *captcha) genMasterImage(size *option.Size, blocks []*Block, graphs []*GraphImage) (image.Image, image.Image, error) {
 	var drawBlocks = make([]*DrawBlock, 0, len(blocks))
 	for i := 0; i < len(blocks); i++ {
 		block := blocks[i]
+		shadow := graphs[i].ShadowImage
 		drawBlocks = append(drawBlocks, &DrawBlock{
 			X:      block.X,
 			Y:      block.Y,
@@ -188,7 +229,7 @@ func (c *captcha) genMasterImage(size *option.Size, shadowImage image.Image, blo
 			Height: block.Height,
 			Angle:  block.Angle,
 			Block:  block,
-			Image:  shadowImage,
+			Image:  shadow,
 		})
 	}
 
@@ -360,22 +401,6 @@ func (c *captcha) calcYWithDeadZone(start, end, value int, dzdType DeadZoneDirec
 		end -= value
 	}
 	return random.RandInt(start, end)
-}
-
-// genGraph generates random graph resources
-// returns:
-//   - maskImage: Mask image
-//   - shadowImage: Shadow image
-//   - templateImage: Template image
-func (c *captcha) genGraph() (maskImage, shadowImage, templateImage image.Image) {
-	index := helper.RandIndex(len(c.resources.rangGraphImage))
-	if index < 0 {
-		return nil, nil, nil
-	}
-
-	graphImage := c.resources.rangGraphImage[index]
-
-	return graphImage.OverlayImage, graphImage.ShadowImage, graphImage.MaskImage
 }
 
 // check checks the CAPTCHA parameters
