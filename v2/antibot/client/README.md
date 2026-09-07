@@ -6,10 +6,12 @@ Browser companion for [`v2/antibot`](../). Single ES module, no dependencies.
 |---|---|
 | `TrajectoryTracker` | PointerEvent fields + coalesced events; optional `pieceEl` requires press on the tile before drag |
 | `collectBrowserSignals` | webdriver / headless / hardware / plugins hints |
-| `solveJSChallenge` | `sha256(nonce + "|" + probeValue)` for `IssueResponse.js_challenge` |
-| `solvePoW(salt, difficulty)` | leading-zero-bits of `sha256(salt + ":" + nonce)`; Web Workers with inline fallback |
-| `solvePoWInline` / `verifyPoW` / `leadingZeroBits` | building blocks, mirror the Go side |
+| `solveJSChallenge` | rotating workloads: `sha256(nonce\|id\|token\|work\|probe)` |
+| `solvePoW(pow)` | bound SHA-256 or optional `kind:"stretch"` memory mix; Workers + inline |
+| `solvePoWInline` / `verifyPoW` / `powPreimage` / `workloadDigest` / `leadingZeroBits` | building blocks |
 | `AntiBotClient` | `issue()` → PoW + JS challenge in background → `verify()` posts `{id, answer, trajectory, pow_nonce, browser}` |
+| `react.js` / `vue.js` | Thin hook/composable factories (inject React/Vue APIs — zero framework deps) |
+| `fingerprints.js` | Optional soft canvas/webgl hashes + `buildA11YTrajectory` |
 
 ## Usage
 

@@ -23,6 +23,7 @@ func defaultOptions() Option {
 		opts.candidateSlotsMin = 4
 		opts.candidateSlotsMax = 4
 		opts.minSlotSepPx = 0 // derive from tile size
+		opts.realSlotTopK = 5
 
 		// No geometric rotation — exact puzzle mask alignment.
 		opts.rangeGraphAnglePos = []*option.RangeVal{

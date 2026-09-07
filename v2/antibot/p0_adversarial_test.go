@@ -45,11 +45,12 @@ func TestTechFailKeepsChallenge(t *testing.T) {
 		t.Fatalf("want ErrJSChallengeFailed, got %v", err)
 	}
 
-	js := ExpectedJSResponse(iss.JSChallenge.Nonce, "1")
+	browser := BrowserSignals{Languages: []string{"en"}, Platform: "MacIntel", HardwareConcurrency: 8}
+	js := jsResponse(iss, browser)
 	res, err := l.Verify(context.Background(), VerifyRequest{
 		ID: iss.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}),
 		Trajectory: humanTrajectory(), ClientKey: "sid:tech", Signals: testSig(""),
-		Browser: BrowserSignals{Languages: []string{"en"}, JSChallengeResponse: js},
+		Browser: BrowserSignals{Languages: []string{"en"}, Platform: "MacIntel", HardwareConcurrency: 8, JSChallengeResponse: js},
 	})
 	if err != nil {
 		t.Fatalf("geometry after tech fail should work once: %v", err)
@@ -92,7 +93,7 @@ func TestPoWFailKeepsChallenge(t *testing.T) {
 		t.Fatalf("want ErrPoWInvalid, got %v", err)
 	}
 
-	nonce, err := SolvePoW(iss.PoW.Salt, iss.PoW.Difficulty)
+	nonce, err := SolvePoW(iss.PoW.ChallengeID, iss.PoW.Bind, iss.PoW.Salt, iss.PoW.Difficulty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,9 +297,8 @@ func TestNoConsumedFieldOrAttemptSpray(t *testing.T) {
 func TestWarmupClearedOnlyOnCleanSuccess(t *testing.T) {
 	l, err := New(NewMemoryStore(), Config{
 		SecretKey: testKey, AllowNonBrowser: true, AllowMissingPiecePress: true,
-		PoWProbeProb: -1, PoWJitterBits: -1,
+		PoWProbeProb: -1, PoWJitterBits: -1, StretchPoWRiskMin: -1,
 		MinSolveTime: time.Millisecond, MinSessionAge: 0,
-		// warmup enabled
 	})
 	if err != nil {
 		t.Fatal(err)

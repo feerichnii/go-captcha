@@ -17,12 +17,13 @@ type Tolerance struct {
 
 // Kind constants for ChallengeRecord.Kind.
 const (
-	KindSlide  = "slide"
-	KindRotate = "rotate"
+	KindSlide     = "slide"
+	KindRotate    = "rotate"
+	KindInvisible = "invisible" // low-risk signals+PoW/JS only (no geometry)
 )
 
 func validKind(k string) bool {
-	return k == KindSlide || k == KindRotate
+	return k == KindSlide || k == KindRotate || k == KindInvisible
 }
 
 // SlideSubmit is the client payload for slide captchas.

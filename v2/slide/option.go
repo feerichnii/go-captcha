@@ -46,6 +46,9 @@ type Options struct {
 	candidateSlotsMax int
 	// minSlotSepPx is minimum center-to-center distance between slots (0 = derive).
 	minSlotSepPx int
+	// realSlotTopK: real notch is chosen uniformly from the top-K textured
+	// candidates (not always the maximum). Default 5; <=0 → 5.
+	realSlotTopK int
 
 	tileDistort TileDistortConfig
 }
@@ -101,6 +104,14 @@ func (o *Options) GetCandidateSlotsMax() int {
 // GetTileDistort returns a copy of the mild tile-transform config.
 func (o *Options) GetTileDistort() TileDistortConfig {
 	return o.tileDistort
+}
+
+// GetRealSlotTopK returns how many top textured candidates the real slot is drawn from.
+func (o *Options) GetRealSlotTopK() int {
+	if o.realSlotTopK <= 0 {
+		return 5
+	}
+	return o.realSlotTopK
 }
 
 type Option func(*Options)
@@ -194,6 +205,14 @@ func WithMinSlotSeparation(px int) Option {
 func WithTileDistort(cfg TileDistortConfig) Option {
 	return func(opts *Options) {
 		opts.tileDistort = cfg
+	}
+}
+
+// WithRealSlotTopK sets how many highest-texture candidates the real slot is
+// chosen from at random (anti CV-bias). Values < 1 keep the default (5).
+func WithRealSlotTopK(k int) Option {
+	return func(opts *Options) {
+		opts.realSlotTopK = k
 	}
 }
 

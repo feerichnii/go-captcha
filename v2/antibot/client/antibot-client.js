@@ -141,6 +141,7 @@ export class TrajectoryTracker {
       coalesced,
     };
     if (typeof e.isPrimary === "boolean") meta.is_primary = e.isPrimary;
+    if (typeof e.isTrusted === "boolean") meta.is_trusted = e.isTrusted;
     return meta;
   }
 
@@ -204,6 +205,7 @@ export function collectBrowserSignals() {
   if (typeof win.outerWidth === "number" && win.outerWidth === 0 && win.outerHeight === 0) {
     hints.push("outer_zero");
   }
+  const secCH = typeof document !== "undefined" ? "" : ""; // filled by host from headers if needed
   return {
     webdriver: !!nav.webdriver,
     headless_hints: hints,
@@ -213,6 +215,8 @@ export function collectBrowserSignals() {
     device_memory: Number(nav.deviceMemory) || 0,
     outer_zero: !!(win.outerWidth === 0 && win.outerHeight === 0),
     plugin_count: nav.plugins ? nav.plugins.length : 0,
+    max_touch_points: Number(nav.maxTouchPoints) || 0,
+    sec_ch_ua: secCH,
   };
 }
 
@@ -225,12 +229,34 @@ async function sha256Hex(str) {
 }
 
 /**
- * Solve IssueResponse.js_challenge: SHA-256(nonce + "|" + probeValue).
- * @param {{nonce:string, probe?:string}} ch
- * @param {object} [signals] from collectBrowserSignals()
+ * Deterministic workload digest (mirrors antibot.WorkloadDigest).
+ * @param {{workload?:string,seed?:string,token?:string,loop_count?:number}} ch
+ */
+export async function workloadDigest(ch) {
+  const w = ch.workload || "probe";
+  if (w === "loop") {
+    let h = ch.seed || "";
+    const n = ch.loop_count > 0 ? ch.loop_count : 32;
+    for (let i = 0; i < n; i++) h = await sha256Hex(h);
+    return h;
+  }
+  if (w === "mix") {
+    const full = await sha256Hex(`${ch.token || ""}:${ch.seed || ""}`);
+    return full.slice(0, 16);
+  }
+  return "probe";
+}
+
+/**
+ * Solve IssueResponse.js_challenge:
+ * SHA-256(nonce|challengeID|token|workDigest|probeValue)
+ * @param {{nonce:string,challenge_id?:string,token?:string,seed?:string,workload?:string,probe?:string,loop_count?:number}} ch
+ * @param {object} [signals]
  */
 export async function solveJSChallenge(ch, signals = {}) {
   if (!ch?.nonce) return "";
+  const challengeID = ch.challenge_id || ch.challengeId || "";
+  const token = ch.token || "";
   let probeValue = "0";
   switch (ch.probe) {
     case "platform":
@@ -251,7 +277,8 @@ export async function solveJSChallenge(ch, signals = {}) {
       break;
     }
   }
-  return sha256Hex(`${ch.nonce}|${probeValue}`);
+  const work = await workloadDigest(ch);
+  return sha256Hex(`${ch.nonce}|${challengeID}|${token}|${work}|${probeValue}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -280,41 +307,126 @@ async function sha256(str) {
 }
 
 /**
+ * Bound PoW preimage (mirrors antibot.PoWPreimage).
+ * @param {{challenge_id?:string,challengeId?:string,bind?:string,salt:string}} pow
+ * @param {string} nonce
+ */
+export function powPreimage(pow, nonce) {
+  const id = pow.challenge_id || pow.challengeId || "";
+  const bind = pow.bind || "";
+  return `${id}:${bind}:${pow.salt}:${nonce}`;
+}
+
+/**
  * Check a candidate nonce (mirrors antibot.VerifyPoW on the server).
+ * @param {{challenge_id?:string,bind?:string,salt:string}|string} powOrSalt
+ * @param {string} nonceOrBind
+ * @param {number|string} difficultyOrSalt
+ * @param {number} [maybeDiff]
  * @returns {Promise<boolean>}
  */
-export async function verifyPoW(salt, nonce, difficulty) {
+export async function verifyPoW(powOrSalt, nonceOrBind, difficultyOrSalt, maybeDiff) {
+  let difficulty;
+  let nonce;
+  if (typeof powOrSalt === "string") {
+    nonce = String(nonceOrBind ?? "");
+    difficulty = Number(difficultyOrSalt) || 0;
+    if (difficulty <= 0) return true;
+    if (!powOrSalt || !nonce || nonce.length > 64) return false;
+    const h = await sha256(`${powOrSalt}:${nonce}`);
+    return leadingZeroBits(h) >= difficulty;
+  }
+  nonce = String(nonceOrBind ?? "");
+  difficulty = Number(difficultyOrSalt) || 0;
   if (difficulty <= 0) return true;
-  if (!salt || !nonce || nonce.length > 64) return false;
-  const h = await sha256(`${salt}:${nonce}`);
+  if (!powOrSalt?.salt || !nonce || nonce.length > 64) return false;
+  if (powOrSalt.kind === "stretch") {
+    const dig = await stretchDigest(powOrSalt, nonce);
+    const bytes = hexToBytes(dig);
+    return leadingZeroBits(bytes) >= difficulty;
+  }
+  const h = await sha256(powPreimage(powOrSalt, nonce));
   return leadingZeroBits(h) >= difficulty;
+}
+
+function hexToBytes(hex) {
+  const out = new Uint8Array(hex.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
+
+/** Mirrors antibot.StretchDigest (smaller loops for browser). */
+export async function stretchDigest(pow, nonce) {
+  let mb = pow.memory_mb || 8;
+  if (mb > 32) mb = 32;
+  if (mb < 1) mb = 1;
+  let rounds = pow.rounds || 2;
+  if (rounds < 1) rounds = 1;
+  const size = mb * 1024 * 1024;
+  const buf = new Uint8Array(size);
+  let seed = await sha256(powPreimage(pow, nonce));
+  buf.set(seed.subarray(0, Math.min(32, size)));
+  const subtle = globalThis.crypto.subtle;
+  for (let r = 0; r < rounds; r++) {
+    let block = seed.slice();
+    for (let i = 0; i < size; i += 32) {
+      const view = new DataView(block.buffer, block.byteOffset, 4);
+      view.setUint32(0, (i ^ r) >>> 0, true);
+      block = new Uint8Array(await subtle.digest("SHA-256", block));
+      const end = Math.min(i + 32, size);
+      for (let j = i; j < end; j++) buf[j] ^= block[(j - i) % 32];
+    }
+    seed = new Uint8Array(await subtle.digest("SHA-256", buf.subarray(size - 32)));
+  }
+  const tail = new Uint8Array(35);
+  tail.set(seed, 0);
+  tail[32] = buf[0];
+  tail[33] = buf[(size / 2) | 0];
+  tail[34] = buf[size - 1];
+  const sum = new Uint8Array(await subtle.digest("SHA-256", tail));
+  return Array.from(sum, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
 /**
  * Single-threaded solver. Yields to the event loop every `batch` hashes so the
  * UI stays responsive when no Worker is available.
  *
- * @param {string} salt
- * @param {number} difficulty leading zero bits (server sends 14–22)
+ * @param {{challenge_id?:string,bind?:string,salt:string,difficulty:number}|string} powOrSalt
+ * @param {number} [difficulty] when first arg is salt string (legacy)
  * @param {object} [opts]
  * @returns {Promise<string>} nonce (decimal string, <= 64 chars)
  */
-export async function solvePoWInline(salt, difficulty, opts = {}) {
+export async function solvePoWInline(powOrSalt, difficulty, opts = {}) {
+  let pow;
+  if (typeof powOrSalt === "string") {
+    pow = { salt: powOrSalt, challenge_id: opts.challenge_id || "", bind: opts.bind || "" };
+  } else {
+    pow = powOrSalt || {};
+    opts = difficulty && typeof difficulty === "object" ? difficulty : opts;
+    difficulty = pow.difficulty ?? 0;
+  }
   if (difficulty <= 0) return "0";
   if (difficulty > 32) throw new Error(`antibot: difficulty ${difficulty} exceeds cap 32`);
   const start = opts.start ?? 0;
   const step = opts.step ?? 1;
-  const batch = opts.batch ?? 256;
+  const batch = opts.batch ?? 64;
   const maxIter = opts.maxIterations ?? 2 ** (difficulty + 6);
-  const enc = new TextEncoder();
   const subtle = globalThis.crypto?.subtle;
   if (!subtle) throw new Error("antibot: WebCrypto not available");
 
   let n = start;
   for (let i = 0; i < maxIter; i++) {
     if (opts.signal?.aborted) throw new Error("antibot: pow aborted");
-    const h = new Uint8Array(await subtle.digest("SHA-256", enc.encode(`${salt}:${n}`)));
-    if (leadingZeroBits(h) >= difficulty) return String(n);
+    const nonce = String(n);
+    let ok = false;
+    if (pow.kind === "stretch") {
+      const dig = await stretchDigest(pow, nonce);
+      ok = leadingZeroBits(hexToBytes(dig)) >= difficulty;
+    } else {
+      const h = await sha256(powPreimage(pow, nonce));
+      ok = leadingZeroBits(h) >= difficulty;
+    }
+    if (ok) return nonce;
     n += step;
     if (i % batch === batch - 1) {
       opts.onProgress?.(i + 1);
@@ -327,9 +439,9 @@ export async function solvePoWInline(salt, difficulty, opts = {}) {
 const WORKER_SRC = `
 function lzb(b){let n=0;for(const x of b){if(x===0){n+=8;continue}n+=Math.clz32(x)-24;break}return n}
 self.onmessage=async(e)=>{
-  const {salt,difficulty,start,step}=e.data;const enc=new TextEncoder();
+  const {prefix,difficulty,start,step}=e.data;const enc=new TextEncoder();
   for(let n=start;;n+=step){
-    const h=new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(salt+':'+n)));
+    const h=new Uint8Array(await crypto.subtle.digest('SHA-256',enc.encode(prefix+n)));
     if(lzb(h)>=difficulty){self.postMessage({nonce:String(n)});return}
   }
 };`;
@@ -337,17 +449,30 @@ self.onmessage=async(e)=>{
 /**
  * Solve PoW using Web Workers (one per core, sharded by stride) with an
  * inline fallback. Resolves with the first nonce found.
+ * @param {{challenge_id?:string,bind?:string,salt:string,difficulty:number}|string} powOrSalt
+ * @param {number} [difficulty]
+ * @param {object} [opts]
  */
-export async function solvePoW(salt, difficulty, opts = {}) {
-  if (difficulty <= 0) return "0";
+export async function solvePoW(powOrSalt, difficulty, opts = {}) {
+  let pow;
+  if (typeof powOrSalt === "string") {
+    pow = { salt: powOrSalt, challenge_id: opts.challenge_id || "", bind: opts.bind || "", difficulty };
+  } else {
+    pow = { ...powOrSalt };
+    if (difficulty && typeof difficulty === "object") opts = difficulty;
+    else if (typeof difficulty === "number") pow.difficulty = difficulty;
+  }
+  const diff = pow.difficulty ?? 0;
+  if (diff <= 0) return "0";
   const canWorker =
     typeof Worker !== "undefined" && typeof Blob !== "undefined" && typeof URL !== "undefined" && URL.createObjectURL;
-  if (!canWorker) return solvePoWInline(salt, difficulty, opts);
+  if (!canWorker) return solvePoWInline(pow, diff, opts);
 
   const workers = Math.max(1, Math.min(opts.workers ?? navigator?.hardwareConcurrency ?? 2, 4));
   const timeoutMs = opts.timeoutMs ?? 20000;
   const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
   const pool = [];
+  const prefix = `${pow.challenge_id || pow.challengeId || ""}:${pow.bind || ""}:${pow.salt}:`;
 
   const cleanup = () => {
     for (const w of pool) w.terminate();
@@ -369,7 +494,7 @@ export async function solvePoW(salt, difficulty, opts = {}) {
           clearTimeout(timer);
           reject(e.error || new Error("antibot: worker error"));
         };
-        w.postMessage({ salt, difficulty, start: i, step: workers });
+        w.postMessage({ prefix, difficulty: diff, start: i, step: workers });
       }
     });
   } finally {
@@ -447,7 +572,7 @@ export class AntiBotClient {
     }
     if (data.pow && data.pow.difficulty > 0) {
       this.onPoWStart?.(data.pow);
-      ch._powPromise = solvePoW(data.pow.salt, data.pow.difficulty).finally(() => this.onPoWDone?.());
+      ch._powPromise = solvePoW(data.pow).finally(() => this.onPoWDone?.());
       ch._powPromise.catch(() => {});
     }
     return ch;

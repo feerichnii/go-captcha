@@ -39,6 +39,11 @@ type CalibrationReport struct {
 	BotP95 float64
 	// SuggestedRiskThreshold is HumanP05 (never above BotP95 when both exist).
 	SuggestedRiskThreshold float64
+	// SuggestedHardReject is BotP95 when bots exist (0 if none).
+	SuggestedHardReject float64
+	// BestF1Threshold maximizes F1 treating score>=t as human.
+	BestF1Threshold float64
+	BestF1          float64
 }
 
 // Report computes percentiles; zero values when there is no data.
@@ -55,11 +60,110 @@ func (c *Calibrator) Report() CalibrationReport {
 	}
 	if len(b) > 0 {
 		r.BotP95 = percentile(b, 0.95)
+		r.SuggestedHardReject = r.BotP95
 		if len(h) > 0 && r.SuggestedRiskThreshold > r.BotP95 {
 			r.SuggestedRiskThreshold = r.BotP95
 		}
 	}
+	r.BestF1Threshold, r.BestF1 = bestF1Threshold(h, b)
 	return r
+}
+
+// ROCPoint is true-positive / false-positive rate at a score threshold
+// (score >= t classified as human).
+type ROCPoint struct {
+	Threshold float64
+	TPR       float64
+	FPR       float64
+}
+
+// ROC returns TPR/FPR for each unique sample score as threshold.
+func (c *Calibrator) ROC() []ROCPoint {
+	c.mu.Lock()
+	h := append([]float64(nil), c.humans...)
+	b := append([]float64(nil), c.bots...)
+	c.mu.Unlock()
+	if len(h)+len(b) == 0 {
+		return nil
+	}
+	thresh := uniqueSorted(append(append([]float64{}, h...), b...))
+	out := make([]ROCPoint, 0, len(thresh))
+	for _, t := range thresh {
+		var tp, fn, fp, tn float64
+		for _, s := range h {
+			if s >= t {
+				tp++
+			} else {
+				fn++
+			}
+		}
+		for _, s := range b {
+			if s >= t {
+				fp++
+			} else {
+				tn++
+			}
+		}
+		tpr, fpr := 0.0, 0.0
+		if tp+fn > 0 {
+			tpr = tp / (tp + fn)
+		}
+		if fp+tn > 0 {
+			fpr = fp / (fp + tn)
+		}
+		out = append(out, ROCPoint{Threshold: t, TPR: tpr, FPR: fpr})
+	}
+	return out
+}
+
+func bestF1Threshold(humans, bots []float64) (thresh, f1 float64) {
+	if len(humans) == 0 || len(bots) == 0 {
+		return 0, 0
+	}
+	cands := uniqueSorted(append(append([]float64{}, humans...), bots...))
+	bestT, best := cands[0], -1.0
+	for _, t := range cands {
+		var tp, fp, fn float64
+		for _, s := range humans {
+			if s >= t {
+				tp++
+			} else {
+				fn++
+			}
+		}
+		for _, s := range bots {
+			if s >= t {
+				fp++
+			}
+		}
+		prec := 0.0
+		if tp+fp > 0 {
+			prec = tp / (tp + fp)
+		}
+		rec := 0.0
+		if tp+fn > 0 {
+			rec = tp / (tp + fn)
+		}
+		cur := 0.0
+		if prec+rec > 0 {
+			cur = 2 * prec * rec / (prec + rec)
+		}
+		if cur > best {
+			best, bestT = cur, t
+		}
+	}
+	return bestT, best
+}
+
+func uniqueSorted(v []float64) []float64 {
+	sort.Float64s(v)
+	out := v[:0]
+	for i, x := range v {
+		if i == 0 || x != v[i-1] {
+			out = append(out, x)
+		}
+	}
+	return out
 }
 
 func percentile(v []float64, p float64) float64 {

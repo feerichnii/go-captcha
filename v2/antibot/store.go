@@ -7,10 +7,12 @@ import (
 )
 
 // Store is the persistence backend (Redis or in-memory).
-// Implementations must make Incr/IncrBy and GetDel atomic.
+// Implementations must make Incr/IncrBy, GetDel and SetNX atomic.
 type Store interface {
 	Get(ctx context.Context, key string) ([]byte, error)
 	Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+	// SetNX sets the key only if it does not exist. Returns true if created.
+	SetNX(ctx context.Context, key string, value []byte, ttl time.Duration) (bool, error)
 	Delete(ctx context.Context, key string) error
 	// GetDel atomically returns the value and removes the key (ErrNotFound if absent).
 	GetDel(ctx context.Context, key string) ([]byte, error)
@@ -32,11 +34,21 @@ type ChallengeRecord struct {
 	PoWSalt     string `json:"pow_salt,omitempty"`
 	ClientHash  string `json:"client_hash"`
 	IPHash      string `json:"ip_hash"` // HMAC of exact client IP at Issue
+	IPEpoch     int64  `json:"ip_epoch"`
 	CreatedAtMs int64  `json:"created_at_ms"`
 	ExpiresAtMs int64  `json:"expires_at_ms"`
 	// JS challenge minted at Issue; verified on Verify.
 	JSNonce string `json:"js_nonce,omitempty"`
 	JSProbe string `json:"js_probe,omitempty"`
+	// JSToken / JSWorkload / JSSeed / JSLoopCount back rotating JS workloads.
+	JSToken     string `json:"js_token,omitempty"`
+	JSWorkload  string `json:"js_workload,omitempty"`
+	JSSeed      string `json:"js_seed,omitempty"`
+	JSLoopCount int    `json:"js_loop_count,omitempty"`
+	// PoWKind is "sha256" (default) or "stretch" (memory-hard-ish).
+	PoWKind     string `json:"pow_kind,omitempty"`
+	PoWMemoryMB int    `json:"pow_memory_mb,omitempty"`
+	PoWRounds   int    `json:"pow_rounds,omitempty"`
 	// TileW/TileH are the public tile/knob size (slide/rotate) for piece_down bounds.
 	TileW int `json:"tile_w,omitempty"`
 	TileH int `json:"tile_h,omitempty"`

@@ -40,7 +40,7 @@ type Config struct {
 	// ASNProvider maps IP → ASN for soft risk (nil = unknown).
 	ASNProvider ASNProvider
 
-	// GeoLockTTL protective TTL for in-flight geo:<ip> (default 30s).
+	// GeoLockTTL protective TTL for in-flight geo:<ip> (default 5s).
 	GeoLockTTL time.Duration
 
 	// DisableSessionWarmup skips new-session +1 risk (tests).
@@ -126,10 +126,53 @@ type Config struct {
 
 	// KeyPrefix for store keys (default "gocaptcha:antibot:").
 	KeyPrefix string
+
+	// DisableHardMode turns off global Dynamic Hard Mode adaptation.
+	DisableHardMode bool
+	// HardModeBadRate activates hard mode when global bad/issue >= this (default 0.45).
+	HardModeBadRate float64
+	// HardModeMinIssues minimum global issues before rate-based hard mode (default 20).
+	HardModeMinIssues int
+	// HardModeAbsBad absolute bad-answer spike that forces hard mode (default 40).
+	HardModeAbsBad int
+	// HardModeTTLFactor multiplies challenge TTL when hard mode is on (default 0.5).
+	HardModeTTLFactor float64
+	// HardModeExtraPoWBits added to chosen PoW difficulty in hard mode (default 2).
+	HardModeExtraPoWBits int
+	// HardModeSlotsMin suggested slide candidate slot floor for integrators (default 6).
+	HardModeSlotsMin int
+
+	// DisableReplayCheck skips trajectory replay fingerprinting.
+	DisableReplayCheck bool
+	// ReplayTTL how long a traj fingerprint blocks reuse (default = FailRateWindow).
+	ReplayTTL time.Duration
+
+	// StretchPoWRiskMin enables memory-stretch PoW at/above this risk (0 = off; default 3).
+	// Negative disables. Stretch is optional high-risk mode — SHA-256 remains default.
+	StretchPoWRiskMin int
+	// StretchMemoryMB buffer size for stretch PoW (default 8, max 32).
+	StretchMemoryMB int
+	// StretchRounds fill/hash rounds (default 2).
+	StretchRounds int
+
+	// ReputationProvider optional external DeviceKey/account reputation (soft risk).
+	ReputationProvider ReputationProvider
+
+	// EnableInvisible allows PreferInvisible Issue when risk is low enough.
+	EnableInvisible bool
+	// InvisibleMaxRisk maximum effective risk for invisible flow (default 0).
+	InvisibleMaxRisk int
+	// AllowA11YKeyboard accepts keyboard-built trajectories (soft; still scored).
+	AllowA11YKeyboard bool
 }
 
 // RequireBrowser reports whether hard JS/UA gates are active.
+// Prefer RequireBrowserSignals — this name overstates attestation.
 func (c Config) RequireBrowser() bool { return !c.AllowNonBrowser }
+
+// RequireBrowserSignals is the preferred alias for RequireBrowser
+// (RejectObviousAutomation / require JS+UA signals — not hardware attestation).
+func (c Config) RequireBrowserSignals() bool { return c.RequireBrowser() }
 
 // RequirePiecePress reports whether slide/rotate must include piece_down.
 func (c Config) RequirePiecePress() bool { return !c.AllowMissingPiecePress }
@@ -156,7 +199,7 @@ func (c *Config) withDefaults() Config {
 	setInt(&out.GlobalIssueRateMax, 10000)
 	setInt(&out.GlobalVerifyRateMax, 20000)
 	setInt(&out.SoftPrefixIssueSoft, 120)
-	setDur(&out.GeoLockTTL, 30*time.Second)
+	setDur(&out.GeoLockTTL, 5*time.Second)
 	setDur(&out.RateWindow, time.Minute)
 	setDur(&out.MinSolveTime, 300*time.Millisecond)
 	setInt(&out.MaxTrajectoryPoints, 2000)
@@ -218,6 +261,26 @@ func (c *Config) withDefaults() Config {
 	if out.KeyPrefix == "" {
 		out.KeyPrefix = "gocaptcha:antibot:"
 	}
+	if out.HardModeBadRate <= 0 {
+		out.HardModeBadRate = 0.45
+	}
+	setInt(&out.HardModeMinIssues, 20)
+	setInt(&out.HardModeAbsBad, 40)
+	if out.HardModeTTLFactor <= 0 || out.HardModeTTLFactor >= 1 {
+		out.HardModeTTLFactor = 0.5
+	}
+	setInt(&out.HardModeExtraPoWBits, 2)
+	setInt(&out.HardModeSlotsMin, 6)
+	setDur(&out.ReplayTTL, out.FailRateWindow)
+	if c.StretchPoWRiskMin == 0 {
+		out.StretchPoWRiskMin = 3
+	}
+	// StretchPoWRiskMin < 0 disables.
+	setInt(&out.StretchMemoryMB, 8)
+	if out.StretchMemoryMB > 32 {
+		out.StretchMemoryMB = 32
+	}
+	setInt(&out.StretchRounds, 2)
 	if c.MinPiecePressDwellMs == 0 {
 		out.MinPiecePressDwellMs = 16
 	} else if c.MinPiecePressDwellMs < 0 {

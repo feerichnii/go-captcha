@@ -70,22 +70,38 @@ type IssueRequest struct {
 	Browser BrowserSignals
 	// Suspicious forces at least risk level 1 (PoW) for this challenge.
 	Suspicious bool
+	// PreferInvisible requests signals-only flow when EnableInvisible and risk allows.
+	PreferInvisible bool
+	// PreferA11Y hints the client should offer keyboard solve (IssueResponse.Mode).
+	PreferA11Y bool
 }
 
 // PoWChallenge is returned to clients that must solve proof-of-work.
+// Hash input is PoWPreimage(ChallengeID, Bind, Salt, nonce) where Bind is the
+// opaque session hash (same as server ClientHash). Kind "stretch" adds a
+// memory buffer mix before the leading-zero check (high-risk optional mode).
 type PoWChallenge struct {
-	Salt       string `json:"salt"`
-	Difficulty int    `json:"difficulty"`
+	Salt        string `json:"salt"`
+	Difficulty  int    `json:"difficulty"`
+	ChallengeID string `json:"challenge_id"`
+	Bind        string `json:"bind"` // session hash
+	Kind        string `json:"kind,omitempty"`
+	MemoryMB    int    `json:"memory_mb,omitempty"`
+	Rounds      int    `json:"rounds,omitempty"`
 }
 
 // IssueResponse is safe to return to the client (no answer).
 type IssueResponse struct {
-	ID          string        `json:"id"`
-	ExpiresAt   int64         `json:"expires_at"` // unix seconds
-	TTLSeconds  int64         `json:"ttl_seconds"`
-	PoW         *PoWChallenge `json:"pow,omitempty"`
-	JSChallenge *JSChallenge  `json:"js_challenge,omitempty"`
-	RiskLevel   int           `json:"-"`
+	ID          string         `json:"id"`
+	ExpiresAt   int64          `json:"expires_at"` // unix seconds
+	TTLSeconds  int64          `json:"ttl_seconds"`
+	PoW         *PoWChallenge  `json:"pow,omitempty"`
+	JSChallenge *JSChallenge   `json:"js_challenge,omitempty"`
+	HardMode    *HardModeState `json:"hard_mode,omitempty"`
+	// Mode is "visual" | "invisible" | "a11y" — client UX hint (server still enforces Kind).
+	Mode      string `json:"mode,omitempty"`
+	Kind      string `json:"kind,omitempty"`
+	RiskLevel int    `json:"-"`
 }
 
 // VerifyRequest is the client solve payload.
@@ -106,8 +122,6 @@ type VerifyResult struct {
 	RiskLevel      int     `json:"risk_level"`
 	RequirePoWNext bool    `json:"require_pow_next"`
 }
-
-func (l *Layer) challengeKey(id string) string { return l.cfg.KeyPrefix + "ch:" + id }
 
 func hashClient(clientKey string) string {
 	sum := sha256.Sum256([]byte(clientKey))
@@ -144,20 +158,11 @@ func (l *Layer) requireIPHash(signals ClientSignals) (netip.Addr, string, error)
 
 // Issue stores a challenge and returns a public id (+ PoW when the client is risky).
 func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
-	if !validKind(req.Kind) || len(req.Answer) == 0 {
-		return nil, ErrInvalidRequest
-	}
 	if err := validateClientKey(req.ClientKey); err != nil {
 		return nil, err
 	}
-	if !json.Valid(req.Answer) {
-		return nil, ErrInvalidRequest
-	}
 	addr, ipHash, err := l.requireIPHash(req.Signals)
 	if err != nil {
-		return nil, err
-	}
-	if err := l.CheckFrozen(ctx, ipHash); err != nil {
 		return nil, err
 	}
 	if err := l.CheckIssueRate(ctx, req.ClientKey, ipHash); err != nil {
@@ -169,6 +174,7 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 
 	hash := hashClient(req.ClientKey)
 	l.noteIssued(ctx, hash)
+	l.noteGlobalIssue(ctx)
 	l.noteSessionRotation(ctx, ipHash, hash)
 	if !l.cfg.DisableSessionWarmup {
 		l.ensureWarmup(ctx, hash)
@@ -177,6 +183,19 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	level, err := l.effectiveRiskAtIssue(ctx, hash, ipHash, addr, req)
 	if err != nil {
 		return nil, err
+	}
+
+	mode := "visual"
+	if req.PreferA11Y && l.cfg.AllowA11YKeyboard {
+		mode = "a11y"
+	}
+	if l.cfg.EnableInvisible && req.PreferInvisible && level <= l.cfg.InvisibleMaxRisk {
+		req.Kind = KindInvisible
+		req.Answer = json.RawMessage(`{"ok":true}`)
+		mode = "invisible"
+	}
+	if !validKind(req.Kind) || len(req.Answer) == 0 || !json.Valid(req.Answer) {
+		return nil, ErrInvalidRequest
 	}
 
 	id, err := challenge.NewID()
@@ -193,6 +212,13 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	if err != nil {
 		return nil, err
 	}
+	jsCh.ChallengeID = id
+
+	hm := l.HardMode(ctx)
+	ttl := l.cfg.TTL
+	if hm.Active && hm.TTLMillis > 0 {
+		ttl = time.Duration(hm.TTLMillis) * time.Millisecond
+	}
 
 	now := l.now()
 	tileW, tileH := tileSizeFromAnswer(req.Kind, req.Answer)
@@ -203,14 +229,47 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		ClientHash:  hash,
 		IPHash:      ipHash,
 		CreatedAtMs: now.UnixMilli(),
-		ExpiresAtMs: now.Add(l.cfg.TTL).UnixMilli(),
+		ExpiresAtMs: now.Add(ttl).UnixMilli(),
 		JSNonce:     jsCh.Nonce,
 		JSProbe:     jsCh.Probe,
+		JSToken:     jsCh.Token,
+		JSWorkload:  jsCh.Workload,
+		JSSeed:      jsCh.Seed,
+		JSLoopCount: jsCh.LoopCount,
 		TileW:       tileW,
 		TileH:       tileH,
 	}
 
 	diff := l.cfg.choosePoW(level)
+	if hm.Active && hm.ExtraPoWBits > 0 {
+		if diff <= 0 {
+			diff = l.cfg.PoWBaseDifficulty
+		}
+		diff += hm.ExtraPoWBits
+		if diff > l.cfg.PoWMaxDifficulty {
+			diff = l.cfg.PoWMaxDifficulty
+		}
+	}
+	// Invisible always carries at least a light probe PoW when configured.
+	if req.Kind == KindInvisible && diff <= 0 {
+		diff = l.cfg.PoWProbeDifficulty
+		if diff <= 0 {
+			diff = 10
+		}
+	}
+	powKind := PoWKindSHA256
+	memMB, rounds := 0, 0
+	if l.cfg.StretchPoWRiskMin > 0 && level >= l.cfg.StretchPoWRiskMin {
+		powKind = PoWKindStretch
+		memMB = l.cfg.StretchMemoryMB
+		rounds = l.cfg.StretchRounds
+		if diff > 10 {
+			diff = 10
+		}
+		if diff < 6 {
+			diff = 6
+		}
+	}
 	var powOut *PoWChallenge
 	if diff > 0 {
 		salt, err := CreatePoW()
@@ -219,15 +278,31 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		}
 		rec.PoWDiff = diff
 		rec.PoWSalt = salt
-		powOut = &PoWChallenge{Salt: salt, Difficulty: diff}
+		rec.PoWKind = powKind
+		rec.PoWMemoryMB = memMB
+		rec.PoWRounds = rounds
+		powOut = &PoWChallenge{
+			Salt: salt, Difficulty: diff, ChallengeID: id, Bind: hash,
+			Kind: powKind, MemoryMB: memMB, Rounds: rounds,
+		}
 	}
 
-	raw, err := encodeRecord(rec)
+	gs, err := l.geometryStore()
 	if err != nil {
 		return nil, err
 	}
-	if err := l.store.Set(ctx, l.challengeKey(id), raw, l.cfg.TTL); err != nil {
-		return nil, wrapStore(err)
+	if err := gs.IssueChallengeAtomic(ctx, IssueChallengeArgs{
+		FreezeKey:    l.freezeKey(ipHash),
+		EpochKey:     l.epochKey(ipHash),
+		ActiveKey:    l.activeKey(ipHash),
+		ChallengeKey: l.challengeKey(ipHash, id),
+		ChKeyPrefix:  l.chKeyPrefix(ipHash),
+		Record:       rec,
+		ChallengeTTL: ttl,
+		EpochTTL:     l.epochTTL(),
+		NowMs:        now.UnixMilli(),
+	}); err != nil {
+		return nil, err
 	}
 
 	l.cfg.Telemetry.OnIssue(IssueEvent{
@@ -238,12 +313,20 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		PoWDifficulty: rec.PoWDiff,
 	})
 
+	var hmOut *HardModeState
+	if hm.Active {
+		hmCopy := hm
+		hmOut = &hmCopy
+	}
 	return &IssueResponse{
 		ID:          id,
 		ExpiresAt:   rec.ExpiresAtMs / 1000,
-		TTLSeconds:  int64(l.cfg.TTL / time.Second),
+		TTLSeconds:  int64(ttl / time.Second),
 		PoW:         powOut,
 		JSChallenge: &jsCh,
+		HardMode:    hmOut,
+		Mode:        mode,
+		Kind:        req.Kind,
 		RiskLevel:   level,
 	}, nil
 }
@@ -265,9 +348,11 @@ func (l *Layer) hasWarmup(ctx context.Context, sessionHash string) bool {
 }
 
 func (l *Layer) noteSessionRotation(ctx context.Context, ipHash, sessionHash string) {
-	// Count distinct sessions per IP roughly via issue-time increments.
+	created, err := l.store.SetNX(ctx, l.sessSeenKey(ipHash, sessionHash), []byte("1"), l.cfg.FailRateWindow)
+	if err != nil || !created {
+		return
+	}
 	_, _ = l.store.Incr(ctx, l.sessRotKey(ipHash), l.cfg.FailRateWindow)
-	_ = sessionHash
 }
 
 func (l *Layer) effectiveRiskAtIssue(ctx context.Context, sessionHash, ipHash string, addr netip.Addr, req IssueRequest) (int, error) {
@@ -297,6 +382,17 @@ func (l *Layer) effectiveRiskAtIssue(ctx context.Context, sessionHash, ipHash st
 	}
 	_ = req.Signals.ASN // soft telemetry only
 	level += bDelta
+	if cDelta, _ := BrowserConsistencyRisk(req.Browser, req.Signals.UserAgent); cDelta > 0 {
+		level += cDelta
+	}
+	if fDelta, _ := FingerprintRisk(req.Browser); fDelta > 0 {
+		level += fDelta
+	}
+	if l.cfg.ReputationProvider != nil {
+		if d := l.cfg.ReputationProvider.RiskDelta(addr, req.ClientKey, req.Signals.DeviceKey); d > 0 {
+			level += d
+		}
+	}
 	if level > l.cfg.MaxRiskLevel {
 		level = l.cfg.MaxRiskLevel
 	}
@@ -351,7 +447,7 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}
 
 	// 1. Read-only load + bind (does not consume).
-	chKey := l.challengeKey(req.ID)
+	chKey := l.challengeKey(ipHash, req.ID)
 	raw, err := l.store.Get(ctx, chKey)
 	if err != nil {
 		return fail(wrapStore(err))
@@ -372,8 +468,16 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		subtle.ConstantTimeCompare([]byte(rec.IPHash), []byte(ipHash)) != 1 {
 		return fail(ErrNotFound)
 	}
+	epoch, err := l.currentEpoch(ctx, ipHash)
+	if err != nil {
+		return fail(err)
+	}
+	if rec.IPEpoch != epoch {
+		return fail(ErrNotFound)
+	}
 
 	// 2. Tech gates — failures keep the challenge.
+	geoStart := l.now()
 	elapsed := nowMs - rec.CreatedAtMs
 	ev.ElapsedMs = elapsed
 	ev.TrajectoryMs = req.Trajectory.DurationMs()
@@ -381,46 +485,72 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		return fail(ErrTooFast)
 	}
 
-	if rec.PoWDiff > 0 && !VerifyPoW(rec.PoWSalt, req.PoWNonce, rec.PoWDiff, l.cfg.MaxNonceLen) {
-		return fail(ErrPoWInvalid)
+	if rec.PoWDiff > 0 {
+		ok := false
+		if rec.PoWKind == PoWKindStretch {
+			ok = VerifyStretchPoW(rec.ID, hash, rec.PoWSalt, req.PoWNonce, rec.PoWDiff, rec.PoWMemoryMB, rec.PoWRounds, l.cfg.MaxNonceLen)
+		} else {
+			ok = VerifyPoW(rec.ID, hash, rec.PoWSalt, req.PoWNonce, rec.PoWDiff, l.cfg.MaxNonceLen)
+		}
+		if !ok {
+			return fail(ErrPoWInvalid)
+		}
 	}
 
 	jsOK := true
 	var extraBrowserReasons []string
 	if rec.JSNonce != "" {
 		if req.Browser.JSChallengeResponse == "" {
-			if l.cfg.RequireBrowser() {
+			if l.cfg.RequireBrowserSignals() {
 				return fail(ErrJSChallengeFailed)
 			}
 			extraBrowserReasons = append(extraBrowserReasons, "js_challenge_skipped")
 		} else {
 			candidates := ProbeCandidates(req.Browser, rec.JSProbe)
-			jsOK = CheckJSChallenge(JSChallenge{Nonce: rec.JSNonce, Probe: rec.JSProbe}, req.Browser.JSChallengeResponse, candidates...)
-			if !jsOK && l.cfg.RequireBrowser() {
+			ch := JSChallenge{
+				Nonce: rec.JSNonce, Probe: rec.JSProbe, Token: rec.JSToken,
+				Seed: rec.JSSeed, Workload: rec.JSWorkload, LoopCount: rec.JSLoopCount,
+			}
+			jsOK = CheckJSChallenge(rec.ID, ch, req.Browser.JSChallengeResponse, candidates...)
+			if !jsOK && l.cfg.RequireBrowserSignals() {
 				return fail(ErrJSChallengeFailed)
 			}
 		}
 	}
 	bDelta, bReasons := BrowserRisk(req.Browser, jsOK)
 	bReasons = append(bReasons, extraBrowserReasons...)
+	if cDelta, cReasons := BrowserConsistencyRisk(req.Browser, req.Signals.UserAgent); cDelta > 0 {
+		bDelta += cDelta
+		bReasons = append(bReasons, cReasons...)
+	}
+	if fDelta, fReasons := FingerprintRisk(req.Browser); fDelta > 0 {
+		bDelta += fDelta
+		bReasons = append(bReasons, fReasons...)
+	}
 
-	if l.cfg.RequirePiecePress() && (rec.Kind == KindSlide || rec.Kind == KindRotate) {
+	invisible := rec.Kind == KindInvisible
+	if !invisible && l.cfg.RequirePiecePress() && (rec.Kind == KindSlide || rec.Kind == KindRotate) {
 		if err := ValidatePieceDown(req.Trajectory, rec.TileW, rec.TileH, l.cfg.MinPiecePressDwellMs); err != nil {
 			return fail(err)
 		}
 	}
 
-	issues := ValidateTrajectory(req.Trajectory, l.cfg.MaxJumpPx)
-	if rec.Kind == KindSlide {
-		var sub SlideSubmit
-		if json.Unmarshal(req.Answer, &sub) == nil {
-			if !FinalPointNear(req.Trajectory, float64(sub.X), float64(sub.Y), float64(l.cfg.SlidePadding)+40) {
-				issues.FinalFarFromAnswer = true
-				issues.add("final_far_from_answer")
+	var sr ScoreResult
+	if invisible {
+		sr = ScoreResult{Score: 0.7, Consistent: true, Components: map[string]float64{"invisible": 1}}
+	} else {
+		issues := ValidateTrajectory(req.Trajectory, l.cfg.MaxJumpPx)
+		if rec.Kind == KindSlide {
+			var sub SlideSubmit
+			if json.Unmarshal(req.Answer, &sub) == nil {
+				if !FinalPointNear(req.Trajectory, float64(sub.X), float64(sub.Y), float64(l.cfg.SlidePadding)+40) {
+					issues.FinalFarFromAnswer = true
+					issues.add("final_far_from_answer")
+				}
 			}
 		}
+		sr = l.cfg.Scorer.Score(req.Trajectory, ScoreContext{ElapsedMs: elapsed, Issues: issues})
 	}
-	sr := l.cfg.Scorer.Score(req.Trajectory, ScoreContext{ElapsedMs: elapsed, Issues: issues})
 	ev.Score, ev.Components, ev.TrajectoryConsistent = sr.Score, sr.Components, sr.Consistent
 
 	levelBefore, err := l.riskLevel(ctx, hash)
@@ -436,10 +566,47 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}
 	rec = claim.Record
 	ev.Attempt = 1
+	ev.GeometryDurationMs = l.now().Sub(geoStart).Milliseconds()
+
+	// Replay peek after claim — soft signal only; recorded on success.
+	if !invisible {
+		if replay, err := l.CheckTrajectoryReplay(ctx, ipHash, req.Trajectory); err != nil {
+			_ = l.FinalizeAbort(ctx, ipHash, claim.ClaimToken)
+			return fail(err)
+		} else if replay {
+			bDelta++
+			bReasons = append(bReasons, "trajectory_replay")
+		}
+	}
+
+	if invisible {
+		if err := l.FinalizeSuccess(ctx, ipHash, claim.ClaimToken); err != nil {
+			return fail(wrapStore(err))
+		}
+		clean := isCleanSuccess(sr, bDelta, req.Signals, nowMs, l.cfg.MinSessionAge)
+		dec, err := l.EvaluateRisk(ctx, hash, RiskInputs{
+			Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
+			Signals: req.Signals, Solved: clean, NowMs: nowMs,
+		})
+		if err != nil {
+			return fail(err)
+		}
+		if clean {
+			l.clearWarmup(ctx, hash)
+		}
+		ev.RiskLevelAfter = dec.LevelAfter
+		ev.Outcome = "ok"
+		return &VerifyResult{
+			Score:          sr.Score,
+			Risk:           1 - sr.Score,
+			RiskLevel:      dec.LevelAfter,
+			RequirePoWNext: l.cfg.powDifficultyFor(dec.LevelAfter) > 0,
+		}, nil
+	}
 
 	plain, err := challenge.Decrypt(l.cfg.SecretKey, rec.Answer, []byte(rec.ID+":"+rec.Kind))
 	if err != nil {
-		_, _ = l.FinalizeFailure(ctx, hash, ipHash, claim.ClaimToken)
+		_ = l.FinalizeAbort(ctx, ipHash, claim.ClaimToken)
 		return fail(fmt.Errorf("%w: answer decrypt: %v", ErrStore, err))
 	}
 	tol := Tolerance{Slide: l.cfg.SlidePadding, Rotate: l.cfg.RotatePadding}
@@ -457,6 +624,7 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	if err := l.FinalizeSuccess(ctx, ipHash, claim.ClaimToken); err != nil {
 		return fail(wrapStore(err))
 	}
+	l.NoteTrajectoryReplay(ctx, ipHash, req.Trajectory)
 
 	clean := isCleanSuccess(sr, bDelta, req.Signals, nowMs, l.cfg.MinSessionAge)
 	dec, err := l.EvaluateRisk(ctx, hash, RiskInputs{

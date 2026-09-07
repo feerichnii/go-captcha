@@ -10,10 +10,7 @@ import (
 	"time"
 )
 
-const (
-	geoLockTTL       = 30 * time.Second
-	badAnswerHistTTL = 6 * time.Hour
-)
+const badAnswerHistTTLFallback = 6 * time.Hour
 
 // GeometryClaim is returned by ClaimGeometry after the challenge is consumed.
 type GeometryClaim struct {
@@ -21,26 +18,60 @@ type GeometryClaim struct {
 	ClaimToken string
 }
 
-func (l *Layer) freezeKey(ipHash string) string {
-	return l.cfg.KeyPrefix + "freeze:" + ipHash
+func (l *Layer) ipRoot(ipHash string) string {
+	return l.cfg.KeyPrefix + "ip:{" + ipHash + "}:"
+}
+
+func (l *Layer) freezeKey(ipHash string) string  { return l.ipRoot(ipHash) + "freeze" }
+func (l *Layer) geoKey(ipHash string) string     { return l.ipRoot(ipHash) + "geo" }
+func (l *Layer) badGeoKey(ipHash string) string  { return l.ipRoot(ipHash) + "badgeo" }
+func (l *Layer) epochKey(ipHash string) string   { return l.ipRoot(ipHash) + "epoch" }
+func (l *Layer) activeKey(ipHash string) string  { return l.ipRoot(ipHash) + "active" }
+func (l *Layer) riskIPKey(ipHash string) string  { return l.ipRoot(ipHash) + "risk" }
+func (l *Layer) sessRotKey(ipHash string) string { return l.ipRoot(ipHash) + "sessrot" }
+func (l *Layer) sessSeenKey(ipHash, sessionHash string) string {
+	return l.ipRoot(ipHash) + "sessseen:" + sessionHash
 }
 func (l *Layer) bindLockKey(sessionHash, ipHash string) string {
-	return l.cfg.KeyPrefix + "lock:bind:" + sessionHash + ":" + ipHash
+	return l.ipRoot(ipHash) + "bind:" + sessionHash
 }
-func (l *Layer) geoKey(ipHash string) string {
-	return l.cfg.KeyPrefix + "geo:" + ipHash
+func (l *Layer) challengeKey(ipHash, id string) string {
+	return l.ipRoot(ipHash) + "ch:" + id
 }
-func (l *Layer) badGeoKey(ipHash string) string {
-	return l.cfg.KeyPrefix + "badgeo:" + ipHash
+func (l *Layer) chKeyPrefix(ipHash string) string {
+	return l.ipRoot(ipHash) + "ch:"
 }
 func (l *Layer) warmupKey(sessionHash string) string {
 	return l.cfg.KeyPrefix + "warmup:" + sessionHash
 }
-func (l *Layer) sessRotKey(ipHash string) string {
-	return l.cfg.KeyPrefix + "sessrot:" + ipHash
+
+func (l *Layer) geoLockTTL() time.Duration {
+	if l.cfg.GeoLockTTL > 0 {
+		return l.cfg.GeoLockTTL
+	}
+	return 5 * time.Second
 }
-func (l *Layer) riskIPKey(ipHash string) string {
-	return l.cfg.KeyPrefix + "risk:ip:" + ipHash
+
+func (l *Layer) epochTTL() time.Duration {
+	fail := l.cfg.FailRateWindow
+	if fail <= 0 {
+		fail = time.Hour
+	}
+	ch := l.cfg.TTL
+	if ch <= 0 {
+		ch = 90 * time.Second
+	}
+	if 2*ch > fail {
+		return 2 * ch
+	}
+	return fail
+}
+
+func (l *Layer) badGeoTTL() time.Duration {
+	if l.cfg.FailRateWindow > 0 {
+		return l.cfg.FailRateWindow
+	}
+	return badAnswerHistTTLFallback
 }
 
 // LockedError is returned when an IP (or binding) is in cooldown.
@@ -119,11 +150,27 @@ func newClaimToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
 
+// IssueChallengeArgs is passed to GeometryStore.IssueChallengeAtomic.
+type IssueChallengeArgs struct {
+	FreezeKey    string
+	EpochKey     string
+	ActiveKey    string
+	ChallengeKey string
+	ChKeyPrefix  string
+	Record       *ChallengeRecord
+	ChallengeTTL time.Duration
+	EpochTTL     time.Duration
+	NowMs        int64
+}
+
 // ClaimGeometryArgs is passed to GeometryStore.ClaimGeometryAtomic.
 type ClaimGeometryArgs struct {
-	ChallengeKey string
 	FreezeKey    string
 	GeoKey       string
+	EpochKey     string
+	ActiveKey    string
+	ChallengeKey string
+	ChallengeID  string
 	ExpectClient string
 	ExpectIP     string
 	ClaimToken   string
@@ -131,12 +178,49 @@ type ClaimGeometryArgs struct {
 	NowMs        int64
 }
 
-// GeometryStore extends Store with atomic geometry claim / finalize.
+// FinalizeFailureArgs is passed to GeometryStore.FinalizeFailureAtomic.
+type FinalizeFailureArgs struct {
+	GeoKey     string
+	FreezeKey  string
+	BindKey    string
+	BadGeoKey  string
+	RiskKey    string
+	EpochKey   string
+	ClaimToken string
+	NowMs      int64
+	BadGeoTTL  time.Duration
+	EpochTTL   time.Duration
+	RiskTTL    time.Duration
+}
+
+// GeometryStore extends Store with atomic IP-scoped challenge ops.
 type GeometryStore interface {
 	Store
+	IssueChallengeAtomic(ctx context.Context, args IssueChallengeArgs) error
 	ClaimGeometryAtomic(ctx context.Context, args ClaimGeometryArgs) (*ChallengeRecord, error)
+	FinalizeFailureAtomic(ctx context.Context, args FinalizeFailureArgs) (retryAfterMs int64, err error)
 	ReleaseGeoLock(ctx context.Context, geoKey, claimToken string) error
-	SetFreeze(ctx context.Context, freezeKey string, untilMs int64, ttl time.Duration) error
+}
+
+func (l *Layer) geometryStore() (GeometryStore, error) {
+	gs, ok := l.store.(GeometryStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: store does not implement GeometryStore", ErrStore)
+	}
+	return gs, nil
+}
+
+// currentEpoch reads epoch key (0 if missing).
+func (l *Layer) currentEpoch(ctx context.Context, ipHash string) (int64, error) {
+	raw, err := l.store.Get(ctx, l.epochKey(ipHash))
+	if errors.Is(err, ErrNotFound) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, wrapStore(err)
+	}
+	n, _ := strconv.ParseInt(string(raw), 10, 64)
+	return n, nil
 }
 
 // ClaimGeometry atomically consumes the challenge under an IP geo lock.
@@ -148,24 +232,25 @@ func (l *Layer) ClaimGeometry(ctx context.Context, challengeID, sessionHash, ipH
 	if err := l.CheckFrozen(ctx, ipHash); err != nil {
 		return nil, err
 	}
-
 	token, err := newClaimToken()
 	if err != nil {
 		return nil, err
 	}
-
-	gs, ok := l.store.(GeometryStore)
-	if !ok {
-		return nil, fmt.Errorf("%w: store does not implement GeometryStore", ErrStore)
+	gs, err := l.geometryStore()
+	if err != nil {
+		return nil, err
 	}
 	rec, err := gs.ClaimGeometryAtomic(ctx, ClaimGeometryArgs{
-		ChallengeKey: l.challengeKey(challengeID),
 		FreezeKey:    l.freezeKey(ipHash),
 		GeoKey:       l.geoKey(ipHash),
+		EpochKey:     l.epochKey(ipHash),
+		ActiveKey:    l.activeKey(ipHash),
+		ChallengeKey: l.challengeKey(ipHash, challengeID),
+		ChallengeID:  challengeID,
 		ExpectClient: sessionHash,
 		ExpectIP:     ipHash,
 		ClaimToken:   token,
-		GeoTTL:       geoLockTTL,
+		GeoTTL:       l.geoLockTTL(),
 		NowMs:        l.now().UnixMilli(),
 	})
 	if err != nil {
@@ -176,29 +261,39 @@ func (l *Layer) ClaimGeometry(ctx context.Context, challengeID, sessionHash, ipH
 
 // FinalizeSuccess releases the IP geo lock after a correct geometry check.
 func (l *Layer) FinalizeSuccess(ctx context.Context, ipHash, claimToken string) error {
-	gs, ok := l.store.(GeometryStore)
-	if !ok {
+	gs, err := l.geometryStore()
+	if err != nil {
 		return nil
 	}
 	return gs.ReleaseGeoLock(ctx, l.geoKey(ipHash), claimToken)
 }
 
-// FinalizeFailure applies escalating IP freeze + bind lock and releases geo lock.
-func (l *Layer) FinalizeFailure(ctx context.Context, sessionHash, ipHash, claimToken string) (retryAfterMs int64, err error) {
-	n, err := l.store.Incr(ctx, l.badGeoKey(ipHash), badAnswerHistTTL)
-	if err != nil {
-		return 0, wrapStore(err)
-	}
-	ttl := freezeTTLForBadCount(n)
-	until := l.now().Add(ttl).UnixMilli()
+// FinalizeAbort releases geo lock only (internal errors after claim).
+func (l *Layer) FinalizeAbort(ctx context.Context, ipHash, claimToken string) error {
+	return l.FinalizeSuccess(ctx, ipHash, claimToken)
+}
 
-	if gs, ok := l.store.(GeometryStore); ok {
-		_ = gs.SetFreeze(ctx, l.freezeKey(ipHash), until, ttl)
-		_ = gs.ReleaseGeoLock(ctx, l.geoKey(ipHash), claimToken)
-	} else {
-		_ = l.store.Set(ctx, l.freezeKey(ipHash), []byte(strconv.FormatInt(until, 10)), ttl)
+// FinalizeFailure applies escalating IP freeze + bind lock + epoch bump.
+func (l *Layer) FinalizeFailure(ctx context.Context, sessionHash, ipHash, claimToken string) (retryAfterMs int64, err error) {
+	gs, err := l.geometryStore()
+	if err != nil {
+		return 0, err
 	}
-	_ = l.store.Set(ctx, l.bindLockKey(sessionHash, ipHash), []byte(strconv.FormatInt(until, 10)), ttl)
-	_, _ = l.store.IncrBy(ctx, l.riskIPKey(ipHash), 1, l.cfg.RiskTTL)
-	return ttl.Milliseconds(), nil
+	retry, err := gs.FinalizeFailureAtomic(ctx, FinalizeFailureArgs{
+		GeoKey:     l.geoKey(ipHash),
+		FreezeKey:  l.freezeKey(ipHash),
+		BindKey:    l.bindLockKey(sessionHash, ipHash),
+		BadGeoKey:  l.badGeoKey(ipHash),
+		RiskKey:    l.riskIPKey(ipHash),
+		EpochKey:   l.epochKey(ipHash),
+		ClaimToken: claimToken,
+		NowMs:      l.now().UnixMilli(),
+		BadGeoTTL:  l.badGeoTTL(),
+		EpochTTL:   l.epochTTL(),
+		RiskTTL:    l.cfg.RiskTTL,
+	})
+	if err == nil && retry > 0 {
+		l.noteGlobalBad(ctx)
+	}
+	return retry, err
 }

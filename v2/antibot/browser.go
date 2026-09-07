@@ -13,62 +13,118 @@ import (
 
 // BrowserSignals are client-reported environment hints. Fields are untrusted:
 // use them as risk inputs; hard gates (JS challenge / non-browser UA) are
-// enforced separately when Config.RequireBrowser() is true.
+// enforced separately when Config.RequireBrowserSignals() is true.
 type BrowserSignals struct {
-	// WebDriver is navigator.webdriver.
-	WebDriver bool `json:"webdriver,omitempty"`
-	// HeadlessHints lists detected headless markers (e.g. "ua.headless", "chrome.runtime_missing").
-	HeadlessHints []string `json:"headless_hints,omitempty"`
-	Languages     []string `json:"languages,omitempty"`
-	Platform      string   `json:"platform,omitempty"`
-	// HardwareConcurrency / DeviceMemory from navigator.
-	HardwareConcurrency int     `json:"hardware_concurrency,omitempty"`
-	DeviceMemory        float64 `json:"device_memory,omitempty"`
-	// CoalescedTotal is the sum of getCoalescedEvents().length across moves.
-	CoalescedTotal int `json:"coalesced_total,omitempty"`
-	// OuterVsInner reports window.outerWidth/Height == 0 (common headless tell).
-	OuterZero bool `json:"outer_zero,omitempty"`
-	// PluginCount is navigator.plugins.length.
-	PluginCount int `json:"plugin_count,omitempty"`
-	// JSChallengeResponse is the solution to IssueResponse.JSChallenge.
-	JSChallengeResponse string `json:"js_challenge_response,omitempty"`
+	WebDriver           bool     `json:"webdriver,omitempty"`
+	HeadlessHints       []string `json:"headless_hints,omitempty"`
+	Languages           []string `json:"languages,omitempty"`
+	Platform            string   `json:"platform,omitempty"`
+	HardwareConcurrency int      `json:"hardware_concurrency,omitempty"`
+	DeviceMemory        float64  `json:"device_memory,omitempty"`
+	CoalescedTotal      int      `json:"coalesced_total,omitempty"`
+	OuterZero           bool     `json:"outer_zero,omitempty"`
+	PluginCount         int      `json:"plugin_count,omitempty"`
+	JSChallengeResponse string   `json:"js_challenge_response,omitempty"`
+	// SecCHUA is sec-ch-ua when the client forwards it (soft consistency).
+	SecCHUA string `json:"sec_ch_ua,omitempty"`
+	// MaxTouchPoints from navigator (soft consistency with UA/platform).
+	MaxTouchPoints int `json:"max_touch_points,omitempty"`
+	// Optional soft fingerprints (never required; empty is fine).
+	CanvasHash string `json:"canvas_hash,omitempty"`
+	WebGLHash  string `json:"webgl_hash,omitempty"`
+	AudioHash  string `json:"audio_hash,omitempty"`
+	// A11Y true when the client used the keyboard accessibility path.
+	A11Y bool `json:"a11y,omitempty"`
 }
 
-// JSChallenge is a tiny DOM/JS puzzle issued with the captcha. The browser
-// must compute SHA-256(nonce + "|" + probe) and send it back as
-// BrowserSignals.JSChallengeResponse. probe is a property the client reads
-// from the live environment (e.g. String(navigator.languages.length)).
+// JSChallenge is a rotating DOM/JS workload issued with the captcha.
+// Client computes:
+//
+//	SHA-256(nonce + "|" + challengeID + "|" + token + "|" + workDigest + "|" + probeValue)
+//
+// workDigest depends on Workload (probe / loop / mix).
 type JSChallenge struct {
-	Nonce string `json:"nonce"`
-	// Probe tells the client which value to append. Supported:
-	//   "languages.length" (default), "platform", "hw"
-	Probe string `json:"probe"`
+	Nonce       string `json:"nonce"`
+	ChallengeID string `json:"challenge_id,omitempty"`
+	Token       string `json:"token"`
+	Seed        string `json:"seed"`
+	Workload    string `json:"workload"` // probe | loop | mix
+	Probe       string `json:"probe"`
+	LoopCount   int    `json:"loop_count,omitempty"`
 }
 
-// NewJSChallenge mints a fresh challenge.
+const (
+	JSWorkloadProbe = "probe"
+	JSWorkloadLoop  = "loop"
+	JSWorkloadMix   = "mix"
+)
+
+// NewJSChallenge mints a fresh rotating workload challenge.
 func NewJSChallenge() (JSChallenge, error) {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	var nb, tb, sb [16]byte
+	if _, err := rand.Read(nb[:]); err != nil {
 		return JSChallenge{}, err
 	}
-	return JSChallenge{Nonce: hex.EncodeToString(b[:]), Probe: "languages.length"}, nil
+	if _, err := rand.Read(tb[:]); err != nil {
+		return JSChallenge{}, err
+	}
+	if _, err := rand.Read(sb[:]); err != nil {
+		return JSChallenge{}, err
+	}
+	workloads := []string{JSWorkloadProbe, JSWorkloadLoop, JSWorkloadMix}
+	probes := []string{"languages.length", "platform", "hw"}
+	w := workloads[cryptoIntn(len(workloads))]
+	p := probes[cryptoIntn(len(probes))]
+	loops := 0
+	if w == JSWorkloadLoop {
+		loops = 32 + cryptoIntn(33) // 32..64
+	}
+	return JSChallenge{
+		Nonce:     hex.EncodeToString(nb[:]),
+		Token:     hex.EncodeToString(tb[:]),
+		Seed:      hex.EncodeToString(sb[:]),
+		Workload:  w,
+		Probe:     p,
+		LoopCount: loops,
+	}, nil
 }
 
-// ExpectedJSResponse returns the hex SHA-256 the client must produce for the
-// given probe value (already stringified).
-func ExpectedJSResponse(nonce, probeValue string) string {
-	sum := sha256.Sum256([]byte(nonce + "|" + probeValue))
+// WorkloadDigest is the deterministic JS-side work output (sans live probe).
+func WorkloadDigest(ch JSChallenge) string {
+	switch ch.Workload {
+	case JSWorkloadLoop:
+		n := ch.LoopCount
+		if n < 1 {
+			n = 32
+		}
+		h := ch.Seed
+		for i := 0; i < n; i++ {
+			sum := sha256.Sum256([]byte(h))
+			h = hex.EncodeToString(sum[:])
+		}
+		return h
+	case JSWorkloadMix:
+		sum := sha256.Sum256([]byte(ch.Token + ":" + ch.Seed))
+		return hex.EncodeToString(sum[:8])
+	default:
+		return "probe"
+	}
+}
+
+// ExpectedJSResponse returns the hex SHA-256 the client must produce.
+func ExpectedJSResponse(nonce, challengeID, token, workDigest, probeValue string) string {
+	sum := sha256.Sum256([]byte(nonce + "|" + challengeID + "|" + token + "|" + workDigest + "|" + probeValue))
 	return hex.EncodeToString(sum[:])
 }
 
 // CheckJSChallenge verifies the client response against known probe candidates.
-// Returns true if any candidate matches (constant-time per candidate).
-func CheckJSChallenge(ch JSChallenge, response string, candidates ...string) bool {
-	if ch.Nonce == "" || response == "" {
+func CheckJSChallenge(challengeID string, ch JSChallenge, response string, candidates ...string) bool {
+	if ch.Nonce == "" || challengeID == "" || ch.Token == "" || response == "" {
 		return false
 	}
+	work := WorkloadDigest(ch)
 	for _, c := range candidates {
-		expect := ExpectedJSResponse(ch.Nonce, c)
+		expect := ExpectedJSResponse(ch.Nonce, challengeID, ch.Token, work, c)
 		if subtle.ConstantTimeCompare([]byte(strings.ToLower(response)), []byte(expect)) == 1 {
 			return true
 		}
@@ -76,8 +132,7 @@ func CheckJSChallenge(ch JSChallenge, response string, candidates ...string) boo
 	return false
 }
 
-// BrowserRisk returns how many risk levels to add based on browser signals
-// (0 = clean, higher = worse). jsOK is whether the JS challenge passed.
+// BrowserRisk returns how many risk levels to add based on browser signals.
 func BrowserRisk(sig BrowserSignals, jsOK bool) (delta int, reasons []string) {
 	if sig.WebDriver {
 		delta++
@@ -95,14 +150,45 @@ func BrowserRisk(sig BrowserSignals, jsOK bool) (delta int, reasons []string) {
 		delta++
 		reasons = append(reasons, "js_challenge_failed")
 	}
-	// Unrealistic hardware fingerprints.
 	if sig.HardwareConcurrency == 1 && sig.DeviceMemory > 0 && sig.DeviceMemory <= 0.5 {
 		delta++
 		reasons = append(reasons, "tiny_device")
 	}
 	if sig.PluginCount == 0 && looksLikeDesktop(sig.Platform) {
-		// Soft signal only — many privacy browsers also report 0.
 		reasons = append(reasons, "no_plugins")
+	}
+	return delta, reasons
+}
+
+// BrowserConsistencyRisk soft-scores UA/platform/touch/language mismatches.
+// Never a hard fail — only risk / PoW pressure.
+func BrowserConsistencyRisk(sig BrowserSignals, ua string) (delta int, reasons []string) {
+	uaL := strings.ToLower(ua)
+	plat := strings.ToLower(sig.Platform)
+	mobileUA := strings.Contains(uaL, "mobile") || strings.Contains(uaL, "android") || strings.Contains(uaL, "iphone")
+	desktopPlat := looksLikeDesktop(sig.Platform)
+
+	if mobileUA && desktopPlat && !strings.Contains(plat, "android") {
+		delta++
+		reasons = append(reasons, "ua_platform_mismatch")
+	}
+	if !mobileUA && sig.MaxTouchPoints > 5 && desktopPlat {
+		// Soft: desktop with many touch points is ok (Surface); only flag zero langs.
+	}
+	if desktopPlat && len(sig.Languages) == 0 && ua != "" {
+		delta++
+		reasons = append(reasons, "empty_languages_desktop")
+	}
+	if mobileUA && sig.MaxTouchPoints == 0 && ua != "" {
+		delta++
+		reasons = append(reasons, "mobile_no_touch")
+	}
+	if sig.SecCHUA != "" {
+		ch := strings.ToLower(sig.SecCHUA)
+		if strings.Contains(uaL, "chrome") && !strings.Contains(ch, "chrom") && !strings.Contains(ch, "google") {
+			delta++
+			reasons = append(reasons, "sec_ch_ua_mismatch")
+		}
 	}
 	return delta, reasons
 }
@@ -112,8 +198,8 @@ func looksLikeDesktop(platform string) bool {
 	return strings.Contains(p, "win") || strings.Contains(p, "mac") || strings.Contains(p, "linux")
 }
 
-// ProbeCandidates builds likely probe values from the reported signals so the
-// server can verify the JS challenge without a round-trip round of trust.
+// ProbeCandidates builds likely probe values from reported signals.
+// Hardcoded filler values ("1","2","3") are intentionally not accepted.
 func ProbeCandidates(sig BrowserSignals, probe string) []string {
 	switch probe {
 	case "platform":
@@ -125,7 +211,7 @@ func ProbeCandidates(sig BrowserSignals, probe string) []string {
 			return []string{strconv.Itoa(sig.HardwareConcurrency)}
 		}
 	default: // languages.length
-		return []string{strconv.Itoa(len(sig.Languages)), "1", "2", "3"}
+		return []string{strconv.Itoa(len(sig.Languages))}
 	}
 	return []string{"0"}
 }
@@ -142,7 +228,6 @@ func FormatUAHint(ua string) []string {
 	return out
 }
 
-// nonBrowserUATokens are substrings that mark scripted HTTP clients.
 var nonBrowserUATokens = []string{
 	"curl/", "wget/", "python-requests", "python-urllib", "httpie", "scrapy",
 	"go-http-client", "java/", "apache-httpclient", "libwww-perl", "php/",
@@ -153,7 +238,7 @@ var nonBrowserUATokens = []string{
 func LooksLikeNonBrowserUA(ua string) bool {
 	ua = strings.TrimSpace(strings.ToLower(ua))
 	if ua == "" {
-		return false // unknown — handled elsewhere when RequireBrowser
+		return false
 	}
 	for _, t := range nonBrowserUATokens {
 		if strings.Contains(ua, t) {
@@ -163,10 +248,8 @@ func LooksLikeNonBrowserUA(ua string) bool {
 	return false
 }
 
-// AssertBrowserHeaders rejects obvious non-browser HTTP requests.
-// Call from HTTP handlers before Issue/Verify when RequireBrowser is on.
-// Empty Sec-Fetch-* is allowed (older browsers / some privacy modes) but
-// non-browser UAs and clearly wrong Sec-Fetch-Mode values are rejected.
+// AssertBrowserHeaders rejects obvious non-browser HTTP requests
+// (RejectObviousAutomation semantics — not browser attestation).
 func AssertBrowserHeaders(r *http.Request) error {
 	if r == nil {
 		return ErrBrowserRequired
@@ -178,7 +261,6 @@ func AssertBrowserHeaders(r *http.Request) error {
 	if mode := strings.ToLower(r.Header.Get("Sec-Fetch-Mode")); mode != "" {
 		switch mode {
 		case "cors", "same-origin", "navigate", "no-cors", "websocket":
-			// ok
 		default:
 			return ErrBrowserRequired
 		}

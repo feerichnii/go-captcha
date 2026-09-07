@@ -48,6 +48,12 @@ func newLayer(t *testing.T, cfg Config) (*Layer, *fakeClock) {
 	// covered by dedicated tests that call New() without these opt-outs.
 	cfg.AllowNonBrowser = true
 	cfg.AllowMissingPiecePress = true
+	if cfg.StretchPoWRiskMin == 0 {
+		cfg.StretchPoWRiskMin = -1 // disable stretch PoW in unit tests unless opted in
+	}
+	if cfg.DisableReplayCheck == false && !cfg.DisableSessionWarmup {
+		// keep replay on by default; fine for tests
+	}
 	cfg.DisableSessionWarmup = true
 	l, err := New(NewMemoryStore(), cfg)
 	if err != nil {
@@ -79,8 +85,8 @@ func humanTrajectory() Trajectory {
 		})
 	}
 	return Trajectory{
-		Points: pts,
-		Events: []string{"pointerdown", "pointermove", "pointerup"},
+		Points:    pts,
+		Events:    []string{"pointerdown", "pointermove", "pointerup"},
 		PieceDown: &PieceDown{X: 20, Y: 20, T: pieceT},
 	}
 }
@@ -107,7 +113,6 @@ func testSig(ip string) ClientSignals {
 	return ClientSignals{IP: ip, UserAgent: "Mozilla/5.0 Test"}
 }
 
-
 // issueSlide issues and advances the clock by a plausible human solve time (2s).
 func issueSlide(t *testing.T, l *Layer, clk *fakeClock, client string) *IssueResponse {
 	t.Helper()
@@ -129,7 +134,7 @@ func powNonce(t *testing.T, iss *IssueResponse) string {
 	if iss.PoW == nil || iss.PoW.Difficulty <= 0 {
 		return ""
 	}
-	n, err := SolvePoW(iss.PoW.Salt, iss.PoW.Difficulty)
+	n, err := SolvePoW(iss.PoW.ChallengeID, iss.PoW.Bind, iss.PoW.Salt, iss.PoW.Difficulty)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,13 +215,32 @@ func TestJSChallengeRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp := ExpectedJSResponse(ch.Nonce, "2")
-	if !CheckJSChallenge(ch, resp, "2") {
+	id := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	ch.ChallengeID = id
+	ch.Workload = JSWorkloadProbe
+	ch.LoopCount = 0
+	work := WorkloadDigest(ch)
+	resp := ExpectedJSResponse(ch.Nonce, id, ch.Token, work, "2")
+	if !CheckJSChallenge(id, ch, resp, "2") {
 		t.Fatal("expected match")
 	}
-	if CheckJSChallenge(ch, "deadbeef", "2") {
+	if CheckJSChallenge(id, ch, "deadbeef", "2") {
 		t.Fatal("wrong response must fail")
 	}
+	cands := ProbeCandidates(BrowserSignals{Languages: []string{"en"}}, "languages.length")
+	if len(cands) != 1 || cands[0] != "1" {
+		t.Fatalf("exact length only, got %v", cands)
+	}
+}
+
+func jsResponse(iss *IssueResponse, browser BrowserSignals) string {
+	ch := *iss.JSChallenge
+	cands := ProbeCandidates(browser, ch.Probe)
+	probe := "0"
+	if len(cands) > 0 {
+		probe = cands[0]
+	}
+	return ExpectedJSResponse(ch.Nonce, iss.ID, ch.Token, WorkloadDigest(ch), probe)
 }
 
 func TestMaxRiskLevelReachesPoWMax(t *testing.T) {
@@ -287,8 +311,10 @@ func TestAnswerEncryptedAtRest(t *testing.T) {
 	store := NewMemoryStore()
 	l, _ := New(store, Config{SecretKey: testKey, AllowNonBrowser: true, AllowMissingPiecePress: true, PoWProbeProb: -1, PoWJitterBits: -1})
 	iss, err := l.Issue(context.Background(), IssueRequest{Kind: KindSlide, Answer: mustJSON(slide.Block{X: 4242, Y: 1}), ClientKey: "c", Signals: testSig("")})
-	if err != nil { t.Fatal(err) }
-	raw, _ := store.Get(context.Background(), l.challengeKey(iss.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := store.Get(context.Background(), l.challengeKey(HashIP(testKey, mustAddr(testClientIP)), iss.ID))
 	if json.Valid(raw) {
 		var rec ChallengeRecord
 		_ = json.Unmarshal(raw, &rec)
@@ -483,7 +509,7 @@ func TestBotScoreEscalatesRiskAndPoW(t *testing.T) {
 	if !errors.Is(err, ErrPoWInvalid) {
 		t.Fatalf("want ErrPoWInvalid, got %v", err)
 	}
-	nonce, _ := SolvePoW(iss2.PoW.Salt, iss2.PoW.Difficulty)
+	nonce, _ := SolvePoW(iss2.PoW.ChallengeID, iss2.PoW.Bind, iss2.PoW.Salt, iss2.PoW.Difficulty)
 	res2, err := l.Verify(ctx, VerifyRequest{ID: iss2.ID, Answer: mustJSON(SlideSubmit{X: 120, Y: 80}), Trajectory: humanTrajectory(), PoWNonce: nonce, ClientKey: "bot", Signals: testSig("")})
 	if err != nil {
 		t.Fatal(err)
@@ -547,10 +573,10 @@ func TestCalibrator(t *testing.T) {
 }
 
 func FuzzVerifyPoW(f *testing.F) {
-	f.Add("salt", "0", 4)
-	f.Add("", "", 0)
-	f.Fuzz(func(t *testing.T, salt, nonce string, diff int) {
-		_ = VerifyPoW(salt, nonce, diff, 64)
+	f.Add("id", "bind", "salt", "0", 4)
+	f.Add("", "", "", "", 0)
+	f.Fuzz(func(t *testing.T, id, bind, salt, nonce string, diff int) {
+		_ = VerifyPoW(id, bind, salt, nonce, diff, 64)
 	})
 }
 

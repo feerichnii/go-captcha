@@ -219,11 +219,11 @@ func (c *captcha) genMasterImageOn(masterBg image.Image, size *option.Size, bloc
 	}
 
 	img, _, err := c.drawImage.DrawWithNRGBA(&DrawImageParams{
-		Width:             size.Width,
-		Height:            size.Height,
-		Background:        masterBg,
-		Alpha:             c.opts.imageAlpha,
-		CaptchaDrawBlocks: drawBlocks,
+		Width:                size.Width,
+		Height:               size.Height,
+		Background:           masterBg,
+		Alpha:                c.opts.imageAlpha,
+		CaptchaDrawBlocks:    drawBlocks,
 		BackgroundPreCropped: true,
 	})
 	return img, err
@@ -297,13 +297,8 @@ func (c *captcha) genGraphBlocksScattered(bg image.Image, imageSize *option.Size
 		candidates = []slotCand{{x: leftMin, y: yLo}}
 	}
 
-	best := 0
-	for i := 1; i < len(candidates); i++ {
-		if candidates[i].tex > candidates[best].tex {
-			best = i
-		}
-	}
-	correct := candidates[best]
+	// Real slot = random among top-K textured candidates (not always max).
+	correct := pickRealSlotTopK(candidates, c.opts.GetRealSlotTopK())
 	// Force shared Y for slider mode (defensive).
 	sharedY := correct.y
 	if !c.opts.enableGraphVerticalRandom {

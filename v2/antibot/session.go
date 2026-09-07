@@ -42,6 +42,8 @@ type ClientSignals struct {
 	ASN int
 	// SessionIssuedAtMs is when the session cookie was minted (0 = unknown).
 	SessionIssuedAtMs int64
+	// DeviceKey is an opaque external install/device/account id for ReputationProvider.
+	DeviceKey string
 }
 
 // Session holds a verified antibot session.

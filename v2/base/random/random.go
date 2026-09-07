@@ -13,7 +13,6 @@ import (
 	"io"
 	"math/rand"
 	"sync"
-	"time"
 )
 
 var (
@@ -42,12 +41,12 @@ func cryptoUint64() (uint64, bool) {
 	return binary.LittleEndian.Uint64(b[:]), true
 }
 
-// cryptoSeed returns a 63-bit seed from crypto/rand (falls back to time).
+// cryptoSeed returns a 63-bit seed from crypto/rand (fail-closed: panics if unavailable).
 func cryptoSeed() int64 {
 	if v, ok := cryptoUint64(); ok {
 		return int64(v >> 1)
 	}
-	return time.Now().UnixNano()
+	panic("gocaptcha/random: crypto/rand failed (fail-closed)")
 }
 
 // getPooledRnd returns a random number generator from the pool
@@ -127,14 +126,14 @@ func RandInt(min, max int) int {
 	for i := 0; i < 16; i++ {
 		v, ok := cryptoUint64()
 		if !ok {
-			return RandIntFast(min, max)
+			panic("gocaptcha/random: crypto/rand failed (fail-closed)")
 		}
 		if v < limit {
 			return int(int64(min) + int64(v%rangeSize))
 		}
 	}
-	// Astronomically unlikely (p < 2^-16 per call) — fall back rather than loop forever.
-	return RandIntFast(min, max)
+	// Astronomically unlikely — still fail-closed rather than weak PRNG.
+	panic("gocaptcha/random: crypto/rand rejection sampling exhausted")
 }
 
 // FastBytes fills a new slice with math/rand bytes from the pool. Intended for

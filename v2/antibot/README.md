@@ -1,21 +1,25 @@
 # antibot
 
-AntiBot layer around go-captcha: challenge lifecycle, trajectory risk scoring, rate limits, and adaptive proof-of-work.
+AntiBot layer around go-captcha: one-shot geometry, HMAC IP identity, escalating freeze, adaptive PoW, Dynamic Hard Mode, and trajectory risk scoring.
 
 ```
 AntiBot layer
-├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, atomic attempts (3), atomic single-use
+├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, one-shot geometry (no MaxAttempts)
+├── IP epoch + active   single live challenge per /32; bad answer bumps epoch (invalidates prefetch)
 ├── Answer storage      AES-256-GCM, bound to challenge id — never plaintext, never sent to client
-├── Session binding     server-issued cookie (sid:…) as ClientKey — never IP:port
-├── Client signals      IP / UA / ASN / session age as risk inputs only
-├── Browser gate        hard JS challenge + non-browser UA reject (curl/wget/…) — opt out AllowNonBrowser
-├── Piece press         slide/rotate require piece_down (checkbox analog) — opt out AllowMissingPiecePress
-├── Trajectory scoring  order, monotonic t, jumps, PointerEvent meta, coalesced → RISK signal
-├── Rate Limiter        per client key, on Issue AND Verify
+├── Binding             session cookie (ClientKey) + HMAC exact IPv4 /32 (IPHash)
+├── Freeze              /32 freeze survives cookie rotation; escalating 2s→5s→15s→60s→300s
+├── Atomic ops          IssueChallenge / ClaimGeometry / FinalizeFailure (Lua or memory mutex)
+├── Bound PoW           SHA-256(challengeID:sessionBind:salt:nonce); Hard Mode adds bits
+├── Bound JS gate       SHA-256(nonce|challengeID|probe); exact probe; non-browser UA reject
+├── Dynamic Hard Mode   global bad/issue spike → shorter TTL, extra PoW, denser-slot hint
+├── Piece press         slide/rotate require piece_down — opt out AllowMissingPiecePress
+├── Trajectory scoring  order, monotonic t, jumps, PointerEvent meta → RISK signal
+├── Rate limits         hard: session + /32 + global; soft: /24 (+ ASN stub) → risk only
 ├── Server-side timing  MinSolveTime, trajectory-vs-elapsed consistency, input size caps
-├── Adaptive PoW        risk level → difficulty + probe PoW + jitter (MaxRiskLevel reaches PoWMax)
-├── Risk engine         trajectory + fail-rate + issue frequency + session age + UA/ASN
-└── Telemetry           events for logging/metrics + Calibrator for threshold tuning
+├── Adaptive PoW        risk level → difficulty + probe PoW + jitter
+├── Success reputation  clean solve slowly lowers session + /32 risk
+└── Telemetry           issue/verify events + Calibrator (ROC / F1 suggestions)
 ```
 
 ## Quick start
@@ -34,91 +38,100 @@ import (
 secret := []byte(os.Getenv("CAPTCHA_SECRET")) // required: >= 32 high-entropy bytes
 rdb := redis.NewClient(&redis.Options{Addr: "127.0.0.1:6379"})
 layer, err := antibot.New(antibot.NewRedisStore(rdb), antibot.Config{
-    SecretKey:   secret,
-    TTL:         90 * time.Second,
-    MaxAttempts: 3,
+    SecretKey:  secret,
+    TTL:        90 * time.Second,
+    GeoLockTTL: 5 * time.Second, // in-flight geometry lock (default 5s)
+    // TrustedProxies: nil → RemoteAddr only (spoofed XFF ignored)
 })
 
-// In HTTP handlers: mint/parse a session cookie, never use RemoteAddr as ClientKey.
 sess, _, _ := antibot.EnsureSessionCookie(w, r, secret, antibot.DefaultSessionCookie, antibot.DefaultSessionTTL)
-signals := antibot.SignalsFromRequest(r, sess)
+signals := antibot.SignalsFromRequestTrusted(r, sess, nil) // authoritative ClientSignals.IP
 
-// Issue — after slide.Generate():
-answer, _ := json.Marshal(captData.GetData()) // secret; encrypted at rest
+answer, _ := json.Marshal(captData.GetData())
 iss, err := layer.Issue(ctx, antibot.IssueRequest{
     Kind:      antibot.KindSlide,
     Answer:    answer,
     ClientKey: sess.ClientKey,
-    Signals:   signals,
+    Signals:   signals, // IP required
 })
-// → client gets: iss.ID, captData.GetPublicData(), images, iss.PoW, iss.JSChallenge
+// → iss.ID, public data, images, iss.PoW, iss.JSChallenge
+// ErrLocked + retry_after_ms when /32 is frozen
 
-// Verify:
 res, err := layer.Verify(ctx, antibot.VerifyRequest{
     ID:         iss.ID,
     ClientKey:  sess.ClientKey,
     Signals:    signals,
-    Browser:    browserFromJSON, // must include js_challenge_response
+    Browser:    browserFromJSON, // js_challenge_response when required
     Answer:     mustJSON(antibot.SlideSubmit{X: ux, Y: uy}),
     Trajectory: antibot.Trajectory{Points: points, Events: events, PieceDown: pieceDown},
-    PoWNonce:   nonce, // required if iss.PoW != nil
+    PoWNonce:   nonce,
 })
+// Wrong geometry → ErrBadAnswer + freeze + epoch bump (retry_after_ms)
+// Tech failures (PoW/JS/timing) keep the challenge (no consume)
 ```
 
-### Browser gate (anti-curl)
+### Verify order (P0.1)
 
-By default (`RequireBrowser()` = true):
+1. Validate + hard rate limits + authoritative IP  
+2. Check `/32` freeze → `ErrLocked`  
+3. Read-only GET challenge; bind session + IPHash + **IPEpoch**  
+4. Tech gates (timing, PoW, JS, piece_down, trajectory) — **do not consume**  
+5. `ClaimGeometryAtomic` (geo lock, consume challenge, clear active)  
+6. Decrypt → on internal error **`FinalizeAbort`** (release geo only)  
+7. Geometry → wrong: **`FinalizeFailureAtomic`** (freeze + epoch); correct: **`FinalizeSuccess`**
 
-- Issue/Verify reject known non-browser User-Agents (`curl`, `wget`, `python-requests`, …) → `ErrBrowserRequired`
-- Verify hard-fails without a valid `JSChallenge` response → `ErrJSChallengeFailed`
-- HTTP handlers should also call `AssertBrowserHeaders(r)` (Sec-Fetch-Mode / Accept)
+**1 visual challenge = 1 geometry attempt.** Prefetch: only one `active` challenge per `/32`; Issue replaces the previous. Bad answer increments IP epoch so older stamped records cannot be claimed.
 
-Opt out for non-browser integrations: `Config{AllowNonBrowser: true}`.
+### Identity and freeze
 
-### Piece press (checkbox analog)
+| Concept | Role |
+|---------|------|
+| Session cookie (`ClientKey`) | Challenge binding + soft risk / warmup |
+| Exact IPv4 `/32` (HMAC) | Hard RL, freeze identity, geo lock, epoch |
+| `freeze:{ip}` | Survives cookie delete; blocks Issue and Verify |
+| Escalation | 1→2s, 2→5s, 3→15s, 4→60s, 5+→300s |
 
-For slide/rotate, the client must press the **movable tile/knob** before dragging. Send `trajectory.piece_down: {x,y,t}` (coords relative to the piece). Missing/out-of-bounds/too-fast → `ErrPiecePressRequired`.
+### Rate / risk buckets
 
-Opt out: `Config{AllowMissingPiecePress: true}`.
+- **Hard:** session, exact `/32`, global  
+- **Soft:** IPv4 `/24`, ASN (pluggable) → risk / PoW only (never hard-block alone)  
+- Distinct **session rotation** per `/32` (`sessseen` SET NX → `sessrot`); risk bump at `sessrot >= 8`
 
-### SecretKey
+### Redis Cluster
 
-Must be **≥ 32 cryptographically random bytes** (`crypto/rand`). Passphrases, repeated characters, and short strings are rejected (`ErrWeakSecretKey`).
+IP transaction keys use hash tag `{ipHash}` so Issue / Claim / Finalize Lua scripts stay on one slot, e.g. `…:ip:{<hash>}:freeze`, `…:ch:<id>`, `…:geo`.
 
-### ClientKey
+### Browser gate / piece press / SecretKey / ClientKey
 
-Use a **server-side session id** (`MintSession` / `EnsureSessionCookie` → `sid:<id>`). Raw IPs and `IP:port` (`net/http.RemoteAddr`) are rejected (`ErrClientKeyLooksLikeIP`). Pass IP/UA via `ClientSignals` / `SignalsFromRequest` (prefer trusted proxy headers over `RemoteAddr`).
+Unchanged behavior: see defaults `RequireBrowser()`, `RequirePiecePress()`, weak-key rejection, and session-id `ClientKey` (never raw IP). Prefer `SignalsFromRequestTrusted` with `TrustedProxies`.
 
 ### What the client must NOT receive
 
-`GetData()`, `IssueRequest.Answer`, anything from the store. Only `ID`, `GetPublicData()`, images, `PoW`, and `JSChallenge`.
+`GetData()`, `IssueRequest.Answer`, store records. Only `ID`, `GetPublicData()`, images, `PoW`, `JSChallenge`.
 
 ## Behavior score is risk, not proof
 
-The trajectory is client-supplied and can be fabricated or replayed. Therefore:
-
-- geometry + JS challenge + piece press (+ PoW when required) are the hard gates;
-- trajectory validation checks `down → move → up`, monotonic timestamps, jump size, final-point proximity, and PointerEvent fields;
-- the score and browser signals move the client's **persistent risk level** (atomic Redis/`IncrBy` counter);
-- risk also rises on high fail-rate, high issue frequency, young sessions, and UA/headless hints;
-- risk level ≥ 1 (or an occasional probe) attaches PoW; difficulty can jitter slightly;
-- `MaxRiskLevel` is derived so `PoWMaxDifficulty` is reachable;
-- `HardRejectScore` (default off) is available if you deliberately want to fail very low scores.
-
-Calibrate before tightening: feed `VerifyEvent.Score` with your own human/bot labels into `Calibrator`.
+Geometry + JS + piece press (+ PoW when required) are hard gates. Trajectory and browser signals move persistent risk. Warmup clears only on **clean** success. Calibrate with `Calibrator` before tightening `HardRejectScore`.
 
 ## Browser side
 
-[`client/antibot-client.js`](client/) records PointerEvent metadata + coalesced events, requires a press on `pieceEl` (tile) before drag, collects browser signals, solves the JS challenge and PoW, then posts the verify payload. HTTP handler example: [`example_http_test.go`](example_http_test.go).
+[`client/antibot-client.js`](client/) — PointerEvent + piece press, JS challenge, PoW, verify POST. Demo surfaces `retry_after_ms` on locked / bad_answer.
 
-```js
-const tracker = new TrajectoryTracker(trackEl, { pieceEl: tileEl }).start();
-```
+PoW: `sha256(challengeID + ":" + sessionBind + ":" + salt + ":" + nonce)` with `difficulty` leading zero bits.  
+Optional high-risk **stretch** PoW (`kind=stretch`) mixes a memory buffer before the same leading-zero check.  
+JS: rotating workloads (`probe` / `loop` / `mix`) → `sha256(nonce|id|token|workDigest|probeValue)`.  
+Hard Mode: when global bad-answer rate spikes, Issue returns `hard_mode` (extra PoW bits, shorter TTL, suggested denser slide slots).  
+Replay: successful solves fingerprint trajectories per `/32` (soft risk on reuse).  
+`RequireBrowserSignals()` is the preferred name for UA/JS gates (RejectObviousAutomation — not attestation).  
+`ReputationProvider` plugs external DeviceKey/account risk into Issue.  
+Invisible: `EnableInvisible` + `PreferInvisible` when risk ≤ `InvisibleMaxRisk`.  
+A11Y: `AllowA11YKeyboard` + client `buildA11YTrajectory`. Soft fingerprints optional via `collectSoftFingerprints`.  
+`GenerateSecretKey` / `PrivacyHash` for key minting and hashed identifier storage.
 
-PoW contract: `sha256(salt + ":" + nonce)` must have `difficulty` leading zero bits; nonce ≤ `MaxNonceLen` (64) bytes.
+### SecretKey
 
-JS challenge: `sha256(nonce + "|" + probeValue)` hex — probe defaults to `languages.length`.
+Must be **≥ 32 cryptographically random bytes** — prefer `GenerateSecretKey(32)`. Weak keys are rejected (`ErrWeakSecretKey`).
 
 ## Store requirements
 
-`Store.Incr` / `IncrBy` and `Store.GetDel` must be atomic. Risk counters use `IncrBy` (same pattern as attempts). `RedisStore` uses a Lua `INCRBY`+`PEXPIRE` script and `GETDEL` (Redis ≥ 6.2). `MemoryStore` is single-process only.
+`Store` must provide atomic `Incr` / `IncrBy`, `GetDel`, and `SetNX`. `GeometryStore` adds `IssueChallengeAtomic`, `ClaimGeometryAtomic`, `FinalizeFailureAtomic`, `ReleaseGeoLock`. `RedisStore` uses Lua + `GETDEL` (Redis ≥ 6.2). `MemoryStore` is single-process only.

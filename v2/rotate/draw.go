@@ -66,8 +66,10 @@ func (d *drawImage) DrawWithCropCircle(params *DrawCropCircleImageParams) (image
 	draw.Draw(cvs.Get(), bgImage.Bounds(), bgImage, image.Point{}, draw.Over)
 	cvs.CropScaleCircle(bgImage.Bounds().Dx()/2, bgImage.Bounds().Dy()/2, bgImage.Bounds().Dy()/2, params.ScaleRatioSize)
 	cvs.Rotate(params.Rotate, true)
-	// Independent noise field for the thumb (see addDiscNoise).
+	// Independent noise + photometric field for the thumb (anti-correlation).
 	addDiscNoise(cvs.Get(), 90, 10)
+	applyThumbPhotometric(cvs.Get())
+	addSoftOcclusion(cvs.Get())
 
 	cvBounds := cvs.Bounds()
 	if cvBounds.Dy() > bgBounds.Dy() || cvBounds.Dx() > bgBounds.Dx() {
@@ -102,14 +104,37 @@ func (d *drawImage) DrawWithNRGBA(params *DrawImageParams) (img image.Image, err
 	return rcm.Get(), nil
 }
 
-// NoiseMaster applies the master's independent noise field. Call it only after
-// the thumb has been cut from the clean master so the two fields are unrelated.
+// NoiseMaster applies the master's independent noise + mild photometric field.
+// Call it only after the thumb has been cut from the clean master so the two
+// fields are unrelated.
 func NoiseMaster(img image.Image) image.Image {
 	if n, ok := img.(*image.NRGBA); ok {
 		addDiscNoise(n, 90, 10)
+		applyMasterPhotometric(n)
 		return n
 	}
 	return img
+}
+
+// applyMasterPhotometric is a mild, independent illumination drift for the
+// master disc (distinct from the thumb's applyThumbPhotometric).
+func applyMasterPhotometric(img *image.NRGBA) {
+	if img == nil {
+		return
+	}
+	bright := random.RandInt(-10, 10)
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			i := img.PixOffset(x, y)
+			if img.Pix[i+3] == 0 {
+				continue
+			}
+			for c := 0; c < 3; c++ {
+				img.Pix[i+c] = clampU8(int(img.Pix[i+c]) + bright)
+			}
+		}
+	}
 }
 
 // addDiscNoise applies independent per-pixel luminance noise to the opaque
@@ -181,4 +206,76 @@ func clampU8(v int) uint8 {
 		return 255
 	}
 	return uint8(v)
+}
+
+// applyThumbPhotometric shifts illumination independently from the master disc.
+func applyThumbPhotometric(img *image.NRGBA) {
+	if img == nil {
+		return
+	}
+	bright := random.RandInt(-18, 18)
+	gamma := 0.88 + float64(random.RandInt(0, 24))/100.0 // ~0.88–1.12
+	b := img.Bounds()
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			i := img.PixOffset(x, y)
+			if img.Pix[i+3] == 0 {
+				continue
+			}
+			for c := 0; c < 3; c++ {
+				v := float64(img.Pix[i+c]) / 255.0
+				v = math.Pow(v, gamma)
+				img.Pix[i+c] = clampU8(int(v*255.0) + bright)
+			}
+		}
+	}
+}
+
+// addSoftOcclusion paints 1–2 low-contrast blobs so correlation peaks blur.
+func addSoftOcclusion(img *image.NRGBA) {
+	if img == nil {
+		return
+	}
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	if w < 8 || h < 8 {
+		return
+	}
+	n := 1 + random.RandInt(0, 1)
+	for i := 0; i < n; i++ {
+		cx := b.Min.X + random.RandInt(w/5, w-w/5)
+		cy := b.Min.Y + random.RandInt(h/5, h-h/5)
+		rx := random.RandInt(w/10, w/4)
+		ry := random.RandInt(h/10, h/4)
+		delta := random.RandInt(-28, 28)
+		r2x := float64(rx * rx)
+		r2y := float64(ry * ry)
+		if r2x < 1 || r2y < 1 {
+			continue
+		}
+		for y := cy - ry; y <= cy+ry; y++ {
+			if y < b.Min.Y || y >= b.Max.Y {
+				continue
+			}
+			dy := float64(y - cy)
+			for x := cx - rx; x <= cx+rx; x++ {
+				if x < b.Min.X || x >= b.Max.X {
+					continue
+				}
+				dx := float64(x - cx)
+				if (dx*dx)/r2x+(dy*dy)/r2y > 1 {
+					continue
+				}
+				off := img.PixOffset(x, y)
+				if img.Pix[off+3] == 0 {
+					continue
+				}
+				fall := 1 - ((dx*dx)/r2x + (dy*dy)/r2y)
+				d := int(float64(delta) * fall)
+				img.Pix[off] = clampU8(int(img.Pix[off]) + d)
+				img.Pix[off+1] = clampU8(int(img.Pix[off+1]) + d)
+				img.Pix[off+2] = clampU8(int(img.Pix[off+2]) + d)
+			}
+		}
+	}
 }

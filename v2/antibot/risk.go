@@ -127,7 +127,7 @@ func (l *Layer) EvaluateRisk(ctx context.Context, hash string, in RiskInputs) (R
 		l.recordFail(ctx, hash)
 	}
 
-	// Clean solve de-escalates by 1 unless other signals still scream.
+	// Clean solve gradually de-escalates session risk (never zeros history).
 	if in.Solved && delta == 0 && before > 0 {
 		delta = -1
 		dec.Reasons = append(dec.Reasons, "clean_solve")
@@ -136,6 +136,12 @@ func (l *Layer) EvaluateRisk(ctx context.Context, hash string, in RiskInputs) (R
 	after, err := l.bumpRisk(ctx, hash, delta)
 	if err != nil {
 		return dec, err
+	}
+	// Soft IP reputation: clean success also nudges /32 risk down by 1 (floor 0).
+	if in.Solved && in.Signals.IP != "" {
+		if addr, err := parseCanonicalIP(in.Signals.IP); err == nil {
+			_, _ = l.store.IncrBy(ctx, l.riskIPKey(HashIP(l.cfg.SecretKey, addr)), -1, l.cfg.RiskTTL)
+		}
 	}
 	dec.Delta = delta
 	dec.LevelAfter = after

@@ -19,10 +19,12 @@ type Point struct {
 	Pressure    float64 `json:"pressure,omitempty"` // 0..1; mouse often 0.5 when down
 	TiltX       float64 `json:"tilt_x,omitempty"`
 	TiltY       float64 `json:"tilt_y,omitempty"`
-	Width       float64 `json:"width,omitempty"`  // contact geometry
+	Width       float64 `json:"width,omitempty"` // contact geometry
 	Height      float64 `json:"height,omitempty"`
 	IsPrimary   *bool   `json:"is_primary,omitempty"`
 	Coalesced   int     `json:"coalesced,omitempty"` // len(getCoalescedEvents())
+	// IsTrusted is Event.isTrusted when available — diagnostic only, never a hard gate.
+	IsTrusted *bool `json:"is_trusted,omitempty"`
 }
 
 // Trajectory is pointer/touch movement collected on the client.
@@ -223,18 +225,22 @@ type ScoreWeights struct {
 	Corrections  float64
 	Events       float64
 	PointerMeta  float64
+	Intervals    float64 // refresh-rate-aware gap distribution
+	Dynamics     float64 // Y micro-motion, curvature, pauses, overshoot
 }
 
 // DefaultWeights are a starting point; calibrate on your own traffic.
 func DefaultWeights() ScoreWeights {
 	return ScoreWeights{
-		Points: 0.12, Duration: 0.18, Velocity: 0.18, Acceleration: 0.12,
-		Timing: 0.12, Corrections: 0.08, Events: 0.10, PointerMeta: 0.10,
+		Points: 0.10, Duration: 0.14, Velocity: 0.14, Acceleration: 0.10,
+		Timing: 0.10, Corrections: 0.08, Events: 0.08, PointerMeta: 0.08,
+		Intervals: 0.09, Dynamics: 0.09,
 	}
 }
 
 func (w ScoreWeights) sum() float64 {
-	return w.Points + w.Duration + w.Velocity + w.Acceleration + w.Timing + w.Corrections + w.Events + w.PointerMeta
+	return w.Points + w.Duration + w.Velocity + w.Acceleration + w.Timing + w.Corrections +
+		w.Events + w.PointerMeta + w.Intervals + w.Dynamics
 }
 
 // HeuristicScorer is the default Scorer.
@@ -274,6 +280,19 @@ func (h HeuristicScorer) Score(tr Trajectory, sc ScoreContext) ScoreResult {
 	if sc.ElapsedMs > 0 && duration > float64(sc.ElapsedMs)+100 {
 		res.Consistent = false
 	}
+	// Stronger server/client timing: traj much shorter than elapsed or absurd ratio.
+	if sc.ElapsedMs > 0 && duration > 0 {
+		ratio := duration / float64(sc.ElapsedMs)
+		if ratio < 0.05 && sc.ElapsedMs > 2000 {
+			res.Consistent = false
+			comp["timing_ratio"] = 0.1
+		} else if ratio > 3 && duration > 500 {
+			res.Consistent = false
+			comp["timing_ratio"] = 0.2
+		} else {
+			comp["timing_ratio"] = clamp01(1 - math.Abs(1-ratio)*0.5)
+		}
+	}
 
 	vels, accs, gaps, corrections := motionStats(pts)
 	comp["velocity"] = varianceScore(vels, 0.02, 8)
@@ -282,16 +301,103 @@ func (h HeuristicScorer) Score(tr Trajectory, sc ScoreContext) ScoreResult {
 	comp["corrections"] = clamp01(float64(corrections) / 4)
 	comp["events"] = eventScore(tr.Events)
 	comp["pointer_meta"] = pointerMetaScore(pts, sc.Issues)
+	comp["intervals"] = intervalHzScore(gaps)
+	comp["dynamics"] = dynamicsScore(pts, gaps)
 
 	score := (w.Points*comp["points"] + w.Duration*comp["duration"] + w.Velocity*comp["velocity"] +
 		w.Acceleration*comp["acceleration"] + w.Timing*comp["timing"] + w.Corrections*comp["corrections"] +
-		w.Events*comp["events"] + w.PointerMeta*comp["pointer_meta"]) / w.sum()
+		w.Events*comp["events"] + w.PointerMeta*comp["pointer_meta"] +
+		w.Intervals*comp["intervals"] + w.Dynamics*comp["dynamics"]) / w.sum()
 
 	if !res.Consistent || sc.Issues.BadEventOrder || sc.Issues.HugeJump {
 		score *= 0.4
 	}
 	res.Score = clamp01(score)
 	return res
+}
+
+// intervalHzScore rewards gap distributions near 60/120/144 Hz (± coalescing).
+func intervalHzScore(gaps []float64) float64 {
+	if len(gaps) < 4 {
+		return 0.3
+	}
+	targets := []float64{1000.0 / 60, 1000.0 / 120, 1000.0 / 144} // ~16.7, 8.3, 6.9
+	near := 0
+	for _, g := range gaps {
+		if g < 1 || g > 80 {
+			continue
+		}
+		for _, t := range targets {
+			if math.Abs(g-t) <= t*0.45 || math.Abs(g-2*t) <= t*0.5 {
+				near++
+				break
+			}
+		}
+	}
+	return clamp01(float64(near) / float64(len(gaps)))
+}
+
+// dynamicsScore looks at Y micro-motion, path curvature, pauses, and end overshoot.
+func dynamicsScore(pts []Point, gaps []float64) float64 {
+	if len(pts) < 4 {
+		return 0.2
+	}
+	var yVar, pathLen, chord float64
+	yMean := 0.0
+	for _, p := range pts {
+		yMean += p.Y
+	}
+	yMean /= float64(len(pts))
+	for _, p := range pts {
+		d := p.Y - yMean
+		yVar += d * d
+	}
+	yVar /= float64(len(pts))
+	for i := 1; i < len(pts); i++ {
+		pathLen += math.Hypot(pts[i].X-pts[i-1].X, pts[i].Y-pts[i-1].Y)
+	}
+	chord = math.Hypot(pts[len(pts)-1].X-pts[0].X, pts[len(pts)-1].Y-pts[0].Y)
+	curv := 0.0
+	if chord > 1 {
+		curv = clamp01((pathLen/chord - 1) / 2)
+	}
+	yMicro := clamp01(math.Sqrt(yVar) / 8)
+
+	pauses := 0
+	for _, g := range gaps {
+		if g >= 40 && g <= 400 {
+			pauses++
+		}
+	}
+	pauseScore := clamp01(float64(pauses) / 3)
+
+	overshoot := 0.0
+	if len(pts) >= 6 {
+		final := pts[len(pts)-1].X
+		start := len(pts) * 2 / 3
+		maxX := final
+		for i := start; i < len(pts); i++ {
+			if pts[i].X > maxX {
+				maxX = pts[i].X
+			}
+		}
+		if maxX > final+2 {
+			overshoot = clamp01((maxX - final) / 20)
+		}
+	}
+
+	trusted := 0
+	for _, p := range pts {
+		if p.IsTrusted != nil && *p.IsTrusted {
+			trusted++
+		}
+	}
+	trustBonus := 0.0
+	if trusted > 0 {
+		trustBonus = 0.05
+	}
+
+	return clamp01(0.25*yMicro + 0.25*curv + 0.25*pauseScore + 0.2*overshoot + trustBonus)
 }
 
 func pointerMetaScore(pts []Point, iss TrajectoryIssues) float64 {

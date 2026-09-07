@@ -2,7 +2,15 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { leadingZeroBits, verifyPoW, solvePoWInline, solvePoW, TrajectoryTracker, AntiBotClient } from "./antibot-client.js";
+import {
+  leadingZeroBits,
+  verifyPoW,
+  solvePoWInline,
+  solvePoW,
+  powPreimage,
+  TrajectoryTracker,
+  AntiBotClient,
+} from "./antibot-client.js";
 
 test("leadingZeroBits matches Go implementation", () => {
   assert.equal(leadingZeroBits([0, 0, 0x0f]), 20);
@@ -12,24 +20,30 @@ test("leadingZeroBits matches Go implementation", () => {
 });
 
 test("solvePoWInline produces a nonce the server accepts", async () => {
-  const salt = "0123456789abcdef0123456789abcdef";
-  const nonce = await solvePoWInline(salt, 10);
+  const pow = {
+    challenge_id: "cid",
+    bind: "sess",
+    salt: "0123456789abcdef0123456789abcdef",
+    difficulty: 10,
+  };
+  const nonce = await solvePoWInline(pow);
   assert.ok(nonce.length <= 64);
-  assert.equal(await verifyPoW(salt, nonce, 10), true);
-  // Cross-check with node:crypto exactly like Go: sha256(salt + ":" + nonce)
-  const h = createHash("sha256").update(`${salt}:${nonce}`).digest();
+  assert.equal(await verifyPoW(pow, nonce, 10), true);
+  const h = createHash("sha256").update(powPreimage(pow, nonce)).digest();
   assert.ok(leadingZeroBits(h) >= 10);
 });
 
 test("solvePoW falls back inline outside a browser", async () => {
-  const nonce = await solvePoW("salt", 6);
-  assert.equal(await verifyPoW("salt", nonce, 6), true);
+  const pow = { challenge_id: "c", bind: "b", salt: "salt", difficulty: 6 };
+  const nonce = await solvePoW(pow);
+  assert.equal(await verifyPoW(pow, nonce, 6), true);
 });
 
 test("verifyPoW rejects bad or oversized nonces", async () => {
-  assert.equal(await verifyPoW("s", "", 4), false);
-  assert.equal(await verifyPoW("s", "x".repeat(65), 1), false);
-  assert.equal(await verifyPoW("s", "anything", 0), true);
+  const pow = { challenge_id: "c", bind: "b", salt: "s" };
+  assert.equal(await verifyPoW(pow, "", 4), false);
+  assert.equal(await verifyPoW(pow, "x".repeat(65), 1), false);
+  assert.equal(await verifyPoW(pow, "anything", 0), true);
 });
 
 test("TrajectoryTracker downsamples moves and caps arrays", () => {
@@ -51,9 +65,28 @@ test("TrajectoryTracker downsamples moves and caps arrays", () => {
   assert.ok(Object.keys(listeners).length === 0, "listeners removed on stop");
 });
 
+test("solveJSChallenge matches ExpectedJSResponse contract", async () => {
+  const { solveJSChallenge, workloadDigest } = await import("./antibot-client.js");
+  const nonce = "00112233445566778899aabbccddeeff";
+  const id = "cccccccccccccccccccccccccccccccc";
+  const token = "dddddddddddddddddddddddddddddddd";
+  const ch = {
+    nonce,
+    challenge_id: id,
+    token,
+    seed: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    workload: "probe",
+    probe: "languages.length",
+  };
+  const hex = await solveJSChallenge(ch, { languages: ["en", "fr"] });
+  const work = await workloadDigest(ch);
+  const h = createHash("sha256").update(`${nonce}|${id}|${token}|${work}|2`).digest("hex");
+  assert.equal(hex, h);
+});
+
 test("AntiBotClient issue→verify solves PoW and posts expected shape", async () => {
   const calls = [];
-  const salt = "abcdef";
+  const pow = { salt: "abcdef", difficulty: 8, challenge_id: "c1", bind: "deadbeef", kind: "sha256" };
   const fakeFetch = async (url, init) => {
     const body = JSON.parse(init.body);
     calls.push({ url, body });
@@ -64,8 +97,15 @@ test("AntiBotClient issue→verify solves PoW and posts expected shape", async (
         text: async () =>
           JSON.stringify({
             id: "c1",
-            pow: { salt, difficulty: 8 },
-            js_challenge: { nonce: "aa".repeat(16), probe: "languages.length" },
+            pow,
+            js_challenge: {
+              nonce: "aa".repeat(16),
+              challenge_id: "c1",
+              token: "bb".repeat(16),
+              seed: "cc".repeat(16),
+              workload: "probe",
+              probe: "languages.length",
+            },
           }),
       };
     }
@@ -79,17 +119,9 @@ test("AntiBotClient issue→verify solves PoW and posts expected shape", async (
   assert.equal(v.id, "c1");
   assert.deepEqual(v.answer, { x: 1, y: 2 });
   assert.equal(v.trajectory.points.length, 1);
-  assert.equal(await verifyPoW(salt, v.pow_nonce, 8), true);
+  assert.equal(await verifyPoW(pow, v.pow_nonce, 8), true);
   assert.ok(v.browser);
   assert.ok(typeof v.browser.js_challenge_response === "string" && v.browser.js_challenge_response.length === 64);
-});
-
-test("solveJSChallenge matches ExpectedJSResponse contract", async () => {
-  const { solveJSChallenge } = await import("./antibot-client.js");
-  const nonce = "00112233445566778899aabbccddeeff";
-  const hex = await solveJSChallenge({ nonce, probe: "languages.length" }, { languages: ["en", "fr"] });
-  const h = createHash("sha256").update(`${nonce}|2`).digest("hex");
-  assert.equal(hex, h);
 });
 
 test("TrajectoryTracker records pointer meta when present", () => {
@@ -100,7 +132,6 @@ test("TrajectoryTracker records pointer meta when present", () => {
     getBoundingClientRect: () => ({ left: 0, top: 0 }),
   };
   const tr = new TrajectoryTracker(el, { maxPoints: 10, maxEvents: 10, minIntervalMs: 0 }).start();
-  // Node has no PointerEvent, so the tracker listens for mouse/touch names.
   listeners.mousedown({
     type: "mousedown",
     clientX: 1,
@@ -133,7 +164,6 @@ test("TrajectoryTracker pieceEl requires press before drag", () => {
     getBoundingClientRect: () => ({ left: 50, top: 40 }),
   };
   const tr = new TrajectoryTracker(track, { pieceEl: piece, minIntervalMs: 0 }).start();
-  // Move before arming must be ignored.
   trackListeners.mousemove({ type: "mousemove", clientX: 60, clientY: 50 });
   assert.equal(tr.snapshot().points.length, 0);
   assert.equal(tr.snapshot().piece_down, undefined);

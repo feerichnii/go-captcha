@@ -29,14 +29,15 @@ type VerifyEvent struct {
 	// ElapsedMs is server-measured time since issue.
 	ElapsedMs int64
 	// TrajectoryMs is the client-claimed interaction duration.
-	TrajectoryMs        int64
-	TrajectoryPoints    int
+	TrajectoryMs         int64
+	TrajectoryPoints     int
 	TrajectoryConsistent bool
-	Score               float64
-	Components          map[string]float64
-	RiskLevelBefore     int
-	RiskLevelAfter      int
-	PoWDifficulty       int
+	Score                float64
+	Components           map[string]float64
+	RiskLevelBefore      int
+	RiskLevelAfter       int
+	PoWDifficulty        int
+	GeometryDurationMs   int64
 }
 
 // NoopTelemetry drops all events.
