@@ -46,7 +46,6 @@ func init() {
 	)
 
 	slideTileCapt = builder.Make()
-	//slideTileCapt = builder.MakeWithRegion()
 }
 
 func getSlideTileGraphArr() []*slide.GraphImage {

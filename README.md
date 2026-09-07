@@ -10,7 +10,7 @@
 <br/>
 
 <p align="center">
-<b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides three interactive CAPTCHA types (<b>Slide</b>, <b>Drag-Drop</b>, and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, AEAD-encrypted challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
+<b>GoCaptcha · AntiBot Edition</b> is a powerful, modular, and highly customizable behavioral CAPTCHA library for Golang. It provides two interactive CAPTCHA types (<b>Slide</b> and <b>Rotate</b>) and layers a full <b>AntiBot</b> stack on top: server-only answers, cryptographic randomness, image interference, AEAD-encrypted challenges, behavior scoring, rate limiting, and adaptive proof-of-work.
 </p>
 
 <p align="center"> ⭐️ If it helps you, please give it a star.</p>
@@ -34,7 +34,7 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 
 | Capability            | Upstream | AntiBot Edition |
 |-----------------------|:--------:|:---------------:|
-| Slide / Drag / Rotate | ✅ | ✅ |
+| Slide / Rotate | ✅ | ✅ |
 | Public vs. secret data split  | –  | ✅ `GetPublicData()` |
 | Crypto RNG for answers        | –  | ✅ |
 | Image interference / decoys   | –  | ✅ |
@@ -74,7 +74,7 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 
 ## Core Features
 
-- **Diverse CAPTCHA Types**: Supports Slide, Rotate, and Drag behavioral CAPTCHAs, suitable for various interaction scenarios.
+- **Diverse CAPTCHA Types**: Supports Slide and Rotate behavioral CAPTCHAs, suitable for various interaction scenarios.
 - **Bot-resistant by design**: Cryptographic answer randomness, image interference/decoys, and a public/secret data split so answers never reach the browser.
 - **Full AntiBot orchestration**: Challenge lifecycle, trajectory scoring, rate limiting, and adaptive proof-of-work in a single [`antibot`](v2/antibot) package.
 - **Highly Customizable**: Flexible configuration of images, fonts, colors, angles, sizes, etc., through Options and Resources.
@@ -87,11 +87,10 @@ This edition focuses on making the CAPTCHA hard for automated solvers without ch
 
 ## CAPTCHA Types
 
-`go-captcha` supports the following three CAPTCHA types, each with unique interaction methods, generation logic, and application scenarios:
+`go-captcha` supports the following CAPTCHA types, each with unique interaction methods, generation logic, and application scenarios:
 
-1. **Slide CAPTCHA**: Users slide a puzzle piece to the correct position on the main image, supporting basic and drag-drop modes.
-2. **Drag-Drop CAPTCHA**: A variant of the Slide CAPTCHA, allowing users to drag-drop a puzzle piece to a target position within a larger range.
-3. **Rotate CAPTCHA**: Users rotate a thumbnail to align with the main image’s angle.
+1. **Slide CAPTCHA**: Users slide a puzzle piece horizontally to the correct notch on the main image.
+2. **Rotate CAPTCHA**: Users rotate a thumbnail to align with the main image’s angle.
 
 <br/>
 
@@ -114,12 +113,9 @@ func main(){
 
 <br />
 
-## 🖖 Slide Or Drag-Drop CAPTCHA
+## 🖖 Slide CAPTCHA
 
-The Slide CAPTCHA requires users to slide a puzzle piece to the correct position on the main image. It supports two modes:
-
-- **Basic Mode**: The puzzle piece slides along a fixed Y-axis, suitable for simple verification scenarios.
-- **Drag-Drop Mode**: The puzzle piece can be freely dragged within a larger range, suitable for scenarios requiring higher interaction freedom.
+The Slide CAPTCHA requires users to slide a puzzle piece horizontally to the correct notch on the main image (fixed Y-axis). Multiple identical-silhouette decoy notches are drawn; only one position matches the tile’s background crop.
 
 ### How It Works
 
@@ -171,9 +167,6 @@ func init() {
 	)
 
 	slideTileCapt = builder.Make()
-	
-	// drag-drop mode
-	//dragDropCapt = builder.MakeDragDrop()
 }
 
 func getSlideTileGraphArr() []*slide.GraphImage {
@@ -249,7 +242,6 @@ func loadPng(p string) (image.Image, error) {
 
 ### Make Instance
 - builder.Make()
-- builder.MakeDragDrop() 
 
 
 ### Configuration Options
@@ -262,8 +254,7 @@ func loadPng(p string) (image.Image, error) {
 | slide.WithRangeGraphSize(val option.RangeVal)                  | Set range for random graphic size              |
 | slide.WithRangeGraphAnglePos([]option.RangeVal)                | Set range for random graphic angles            |
 | slide.WithGenGraphNumber(val int)                              | Number of drop slots on the master (default **3**: identical silhouette, 1 correct position). |
-| slide.WithEnableGraphVerticalRandom(val bool)                  | Enable/disable random vertical graphic sorting |
-| slide.WithRangeDeadZoneDirections(val []DeadZoneDirectionType) | Set dead zone directions for puzzle pieces     |
+| slide.WithEnableGraphVerticalRandom(val bool)                  | Allow each notch its own Y (default off; keep off for horizontal slider) |
 
 
 ### Set Resources
@@ -303,8 +294,8 @@ func loadPng(p string) (image.Image, error) {
 
 - Puzzle piece image resources (`OverlayImage`, `ShadowImage`, `MaskImage`) must be valid, otherwise `ImageTypeErr`, `ShadowImageTypeErr`, or `MaskImageTypeErr` will be triggered.
 - Background images must not be empty, otherwise `EmptyBackgroundImageErr` will be triggered.
-- In Basic Mode, the puzzle piece’s Y-coordinate is fixed; in Drag Mode, the Y-coordinate can vary based on `rangeDeadZoneDirections`.
-- Drag Mode is suitable for scenarios requiring higher interaction freedom but may increase user operation time.
+- The tile’s Y-coordinate matches the notch row; users move only along X (e.g. with a horizontal slider).
+- Target notch X is always within `[0, masterWidth − tileWidth]` so a slider can reach every slot.
 
 <br />
 

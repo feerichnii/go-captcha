@@ -15,12 +15,7 @@ func defaultOptions() Option {
 	return func(opts *Options) {
 		opts.imageSize = &option.Size{Width: 300, Height: 220}
 		opts.imageAlpha = 1
-		opts.rangeDeadZoneDirections = []DeadZoneDirectionType{
-			DeadZoneDirectionTypeLeft,
-			DeadZoneDirectionTypeRight,
-			DeadZoneDirectionTypeBottom,
-			DeadZoneDirectionTypeTop,
-		}
+		opts.enableGraphVerticalRandom = false
 
 		// Three drop slots: identical silhouette at different positions;
 		// only one position matches the tile's background crop.

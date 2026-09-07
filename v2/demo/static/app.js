@@ -30,7 +30,7 @@ function ensureTrajectory(snap, kind, tileW, tileH) {
   };
   if (snap?.piece_down) out.piece_down = { ...snap.piece_down };
 
-  if (out.points.length < 1 && (kind === "slide" || kind === "drag" || kind === "rotate")) {
+  if (out.points.length < 1 && (kind === "slide" || kind === "rotate")) {
     return out;
   }
 
@@ -188,78 +188,47 @@ function renderChallenge(card, ch) {
 
   placeTile(dx, dy);
 
-  if (kind === "slide") {
-    const track = $(".track", card);
-    const maxX = Math.max(1, MASTER_W - tw);
-    track.min = 0;
-    track.max = maxX;
-    track.value = dx;
-    // Tracker: pieceEl = tile (checkbox analog), el = track for move events
-    card._tracker = new TrajectoryTracker(track, { pieceEl: tile, relative: false }).start();
-    // Arm immediately when user grabs the slider thumb / presses tile
-    const armAndMove = () => {
-      // Simulate piece press for antibot if user uses the track directly
-      if (!card._tracker.piece_down) {
-        const t = Math.round(nowMs());
-        card._tracker.piece_down = { x: tw / 2, y: th / 2, t };
-        card._tracker._armed = true;
-        card._tracker.events.push("pointerdown");
-      }
-    };
-    track.addEventListener("pointerdown", armAndMove);
-    tile.style.pointerEvents = "auto";
-    tile.style.cursor = "grab";
-    track.oninput = () => {
-      armAndMove();
-      placeTile(Number(track.value), dy);
-      // Record a synthetic move sample for trajectory scoring
-      const tr = card._tracker;
-      if (tr && tr._armed && tr.points.length < tr.maxPoints) {
-        tr.points.push({
-          x: Number(track.value),
-          y: dy,
-          t: Math.round(nowMs()),
-          pointer_type: "mouse",
-          buttons: 1,
-          pressure: 0.5,
-        });
-        if (tr.events.length < tr.maxEvents) tr.events.push("pointermove");
-      }
-    };
-    track.addEventListener("pointerup", () => {
-      const tr = card._tracker;
-      if (tr && tr.events.length < tr.maxEvents) tr.events.push("pointerup");
-    });
-    return;
-  }
-
-  // drag-drop: free drag on stage
-  card._tracker = new TrajectoryTracker(stage, { pieceEl: tile }).start();
-  let dragging = false;
-  let ox = 0;
-  let oy = 0;
-  tile.addEventListener("pointerdown", (e) => {
-    dragging = true;
-    tile.classList.add("dragging");
-    tile.setPointerCapture(e.pointerId);
-    const sx = stage.clientWidth / MASTER_W;
-    const sy = stage.clientHeight / MASTER_H;
-    ox = e.clientX / sx - card._pos.x;
-    oy = e.clientY / sy - card._pos.y;
-  });
-  tile.addEventListener("pointermove", (e) => {
-    if (!dragging) return;
-    const sx = stage.clientWidth / MASTER_W;
-    const sy = stage.clientHeight / MASTER_H;
-    let x = e.clientX / sx - ox;
-    let y = e.clientY / sy - oy;
-    x = Math.max(0, Math.min(MASTER_W - tw, x));
-    y = Math.max(0, Math.min(MASTER_H - th, y));
-    placeTile(x, y);
-  });
-  tile.addEventListener("pointerup", () => {
-    dragging = false;
-    tile.classList.remove("dragging");
+  // slide (horizontal track)
+  const track = $(".track", card);
+  const maxX = Math.max(1, MASTER_W - tw);
+  track.min = 0;
+  track.max = maxX;
+  track.value = dx;
+  // Tracker: pieceEl = tile (checkbox analog), el = track for move events
+  card._tracker = new TrajectoryTracker(track, { pieceEl: tile, relative: false }).start();
+  // Arm immediately when user grabs the slider thumb / presses tile
+  const armAndMove = () => {
+    // Simulate piece press for antibot if user uses the track directly
+    if (!card._tracker.piece_down) {
+      const t = Math.round(nowMs());
+      card._tracker.piece_down = { x: tw / 2, y: th / 2, t };
+      card._tracker._armed = true;
+      card._tracker.events.push("pointerdown");
+    }
+  };
+  track.addEventListener("pointerdown", armAndMove);
+  tile.style.pointerEvents = "auto";
+  tile.style.cursor = "grab";
+  track.oninput = () => {
+    armAndMove();
+    placeTile(Number(track.value), dy);
+    // Record a synthetic move sample for trajectory scoring
+    const tr = card._tracker;
+    if (tr && tr._armed && tr.points.length < tr.maxPoints) {
+      tr.points.push({
+        x: Number(track.value),
+        y: dy,
+        t: Math.round(nowMs()),
+        pointer_type: "mouse",
+        buttons: 1,
+        pressure: 0.5,
+      });
+      if (tr.events.length < tr.maxEvents) tr.events.push("pointermove");
+    }
+  };
+  track.addEventListener("pointerup", () => {
+    const tr = card._tracker;
+    if (tr && tr.events.length < tr.maxEvents) tr.events.push("pointerup");
   });
 }
 
@@ -275,11 +244,23 @@ async function verifyCard(card) {
   try {
     const tracker = card._tracker;
     tracker?.stop();
+<<<<<<< HEAD
     const raw = tracker?.snapshot() || { points: [], events: [] };
     const pub = ch.public || {};
     const tileW = pub.width || (kind === "rotate" ? 150 : 60);
     const tileH = pub.height || tileW;
     const snap = ensureTrajectory(raw, kind, tileW, tileH);
+=======
+    const snap = tracker?.snapshot() || { points: [], events: [] };
+    // Ensure down→move→up if slider produced points without full event set
+    if (snap.points?.length >= 2 && (!snap.events || snap.events.length < 3)) {
+      snap.events = ["pointerdown", "pointermove", "pointerup"];
+    }
+    if (!snap.piece_down && (kind === "slide" || kind === "rotate") && snap.points?.length) {
+      const p0 = snap.points[0];
+      snap.piece_down = { x: 10, y: 10, t: p0.t - 20 };
+    }
+>>>>>>> 823a6d9 (refactor: remove Drag-Drop captcha mode)
 
     let answer;
     if (kind === "rotate") {

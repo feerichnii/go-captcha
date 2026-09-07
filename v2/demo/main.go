@@ -51,12 +51,6 @@ func main() {
 	slideBasic.SetResources(slide.WithBackgrounds(bgs), slide.WithGraphImages(graphs))
 	slideCapt := slideBasic.Make()
 
-	slideDrag := slide.NewBuilder(
-		slide.WithRangeGraphSize(option.RangeVal{Min: 64, Max: 70}),
-	)
-	slideDrag.SetResources(slide.WithBackgrounds(bgs), slide.WithGraphImages(graphs))
-	dragCapt := slideDrag.MakeWithRegion()
-
 	rotBuilder := rotate.NewBuilder()
 	rotBuilder.SetResources(rotate.WithImages(bgs))
 	rotCapt := rotBuilder.Make()
@@ -76,7 +70,7 @@ func main() {
 		_ = antibot.AssertBrowserHeaders(r) // soft in browsers; demos often lack Sec-Fetch in file:// — ignore empty
 
 		var in struct {
-			Kind string `json:"kind"` // slide | drag | rotate
+			Kind string `json:"kind"` // slide | rotate
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		if in.Kind == "" {
@@ -112,17 +106,6 @@ func main() {
 			master, _ = data.GetMasterImage().ToBase64()
 			thumb, _ = data.GetThumbImage().ToBase64()
 			tileKey = "thumb"
-		case "drag":
-			data, err := dragCapt.Generate()
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			kind = antibot.KindSlide
-			answer, _ = json.Marshal(data.GetData())
-			public = data.GetPublicData()
-			master, _ = data.GetMasterImage().ToBase64()
-			thumb, _ = data.GetTileImage().ToBase64()
 		default: // slide
 			data, err := slideCapt.Generate()
 			if err != nil {

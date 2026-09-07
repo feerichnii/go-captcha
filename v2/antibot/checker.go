@@ -25,7 +25,7 @@ func validKind(k string) bool {
 	return k == KindSlide || k == KindRotate
 }
 
-// SlideSubmit is the client payload for slide/drag captchas.
+// SlideSubmit is the client payload for slide captchas.
 type SlideSubmit struct {
 	X int `json:"x"`
 	Y int `json:"y"`

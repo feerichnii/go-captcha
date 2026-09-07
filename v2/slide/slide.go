@@ -18,13 +18,6 @@ import (
 	"github.com/feerichnii/go-captcha/v2/base/random"
 )
 
-type Mode int
-
-const (
-	ModeBasic Mode = iota
-	ModeDrag
-)
-
 // Captcha defines the interface for slide CAPTCHA
 type Captcha interface {
 	setOptions(opts ...Option)
@@ -51,40 +44,24 @@ type captcha struct {
 	drawImage DrawImage
 	opts      *Options
 	resources *Resources
-	mode      Mode
 }
 
-// newWithMode creates a new slide CAPTCHA instance
-// params:
-//   - mode: CAPTCHA mode
-//   - opts: Optional initial options
-//
-// return: Captcha interface instance
-func newWithMode(mode Mode, opts ...Option) Captcha {
+// newCaptcha creates a slide CAPTCHA instance (horizontal slide, fixed Y).
+func newCaptcha(opts ...Option) Captcha {
 	capt := &captcha{
 		logger:    logger.New(),
 		drawImage: NewDrawImage(),
 		opts:      NewOptions(),
 		resources: NewResources(),
-		mode:      mode,
 	}
 
 	defaultOptions()(capt.opts)
 	defaultResource()(capt.resources)
-
 	capt.setOptions(opts...)
-
-	if mode == ModeBasic {
-		capt.opts.rangeDeadZoneDirections = []DeadZoneDirectionType{DeadZoneDirectionTypeLeft}
-		capt.opts.enableGraphVerticalRandom = false
-	}
-
 	return capt
 }
 
 // setOptions sets the CAPTCHA options
-// params:
-//   - opts: Options to set
 func (c *captcha) setOptions(opts ...Option) {
 	for _, opt := range opts {
 		opt(c.opts)
@@ -92,8 +69,6 @@ func (c *captcha) setOptions(opts ...Option) {
 }
 
 // setResources sets the CAPTCHA resources
-// params:
-//   - resources: Resources to set
 func (c *captcha) setResources(resources ...Resource) {
 	for _, resource := range resources {
 		resource(c.resources)
@@ -101,7 +76,6 @@ func (c *captcha) setResources(resources ...Resource) {
 }
 
 // GetOptions gets the CAPTCHA options
-// return: Pointer to options
 func (c *captcha) GetOptions() *Options {
 	return c.opts
 }
@@ -156,15 +130,11 @@ func (c *captcha) Generate() (CaptchaData, error) {
 		return nil, err
 	}
 
-	if c.mode == ModeBasic {
-		block.TileY = block.Y
-		block.DY = block.Y
-	} else {
-		block.TileY = tilePoint.Y
-		block.DY = tilePoint.Y
-	}
+	// Horizontal slide: tile starts on the left at the same Y as the notches.
 	block.TileX = tilePoint.X
 	block.DX = tilePoint.X
+	block.TileY = block.Y
+	block.DY = block.Y
 
 	return &CaptData{
 		block:       block,
@@ -195,7 +165,6 @@ func (c *captcha) pickSlotGraphs(nSlots, correctIdx int) []*GraphImage {
 }
 
 // genMasterImage generates the master CAPTCHA image and background image.
-// Every slot uses the same ShadowImage silhouette at different positions.
 func (c *captcha) genMasterImage(size *option.Size, blocks []*Block, graphs []*GraphImage) (image.Image, image.Image, error) {
 	var drawBlocks = make([]*DrawBlock, 0, len(blocks))
 	for i := 0; i < len(blocks); i++ {
@@ -222,15 +191,6 @@ func (c *captcha) genMasterImage(size *option.Size, blocks []*Block, graphs []*G
 }
 
 // genTileImage generates a tile image
-// params:
-//   - maskImage: Mask image
-//   - bgImage: Background image
-//   - overlayImage: Overlay image
-//   - block: Block data
-//
-// returns:
-//   - image.Image: Tile image
-//   - error: Error information
 func (c *captcha) genTileImage(maskImage image.Image, bgImage image.Image, overlayImage image.Image, block *Block) (image.Image, error) {
 	return c.drawImage.DrawWithTemplate(&DrawTplImageParams{
 		Background: bgImage,
@@ -250,45 +210,19 @@ func (c *captcha) genTileImage(maskImage image.Image, bgImage image.Image, overl
 	})
 }
 
-// randDeadZoneDirection generates a random dead zone direction
-// return: Dead zone direction
-func (c *captcha) randDeadZoneDirection() DeadZoneDirectionType {
-	dirs := c.opts.rangeDeadZoneDirections
-
-	index := helper.RandIndex(len(dirs))
-	if index < 0 {
-		return 0
-	}
-
-	res := dirs[index]
-	return res
-}
-
-// randGraphAngle generates a random graph angle
-// return: Random angle value
 func (c *captcha) randGraphAngle() int {
 	angles := c.opts.rangeGraphAnglePos
-
 	index := helper.RandIndex(len(angles))
 	if index < 0 {
 		return 0
 	}
-
 	angle := angles[index]
-	res := random.RandInt(angle.Min, angle.Max)
-
-	return res
+	return random.RandInt(angle.Min, angle.Max)
 }
 
-// genGraphBlocks generates graph block data
-// params:
-//   - imageSize: Main image size
-//   - size: Graph size range
-//   - length: Number of graphs
-//
-// returns:
-//   - []*Block: List of blocks
-//   - *option.Point: Tile position
+// genGraphBlocks places drop slots across the master and picks a left-side
+// tile start. Notch X is always in [0, width-tileW] so a horizontal slider
+// can reach every target.
 func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, length int) ([]*Block, *option.Point) {
 	var blocks = make([]*Block, 0, length)
 	width := imageSize.Width
@@ -299,18 +233,12 @@ func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, 
 	cHeight := randSize
 	cWidth := randSize
 
-	dzdType := c.randDeadZoneDirection()
 	maxX := width - cWidth
 	if maxX < 0 {
 		maxX = 0
 	}
-	// Keep notches fully on-canvas so a horizontal slider can always reach them
-	// (demo clamps tile left to [0, masterW-tileW]).
-	leftMin := 5
-	if dzdType == DeadZoneDirectionTypeLeft {
-		// Leave room on the left for the ModeBasic tile start.
-		leftMin = cWidth + 5
-	}
+	// Leave room on the left for the tile start position.
+	leftMin := cWidth + 5
 	if leftMin > maxX {
 		leftMin = 0
 	}
@@ -319,10 +247,14 @@ func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, 
 		usable = 0
 	}
 
-	y := c.calcYWithDeadZone(5, height-cHeight-5, cHeight, dzdType)
+	yLo, yHi := 5, height-cHeight-5
+	if yHi < yLo {
+		yHi = yLo
+	}
+	y := random.RandInt(yLo, yHi)
 
 	for i := 0; i < length; i++ {
-		var block = &Block{}
+		block := &Block{}
 		seg := 0
 		if length > 0 {
 			seg = usable / length
@@ -351,81 +283,26 @@ func (c *captcha) genGraphBlocks(imageSize *option.Size, size *option.RangeVal, 
 		}
 
 		if c.opts.enableGraphVerticalRandom {
-			y = c.calcYWithDeadZone(5, height-cHeight-5, cHeight, dzdType)
+			y = random.RandInt(yLo, yHi)
 		}
 
 		block.Y = y
 		block.Width = cWidth
 		block.Height = cHeight
 		block.Angle = randAngle
-
 		blocks = append(blocks, block)
 	}
 
-	point := &option.Point{}
-	if c.mode == ModeBasic {
-		point.X = random.RandInt(5, cWidth/2)
-		if point.X > maxX {
-			point.X = maxX
-		}
-		point.Y = y
-		return blocks, point
+	point := &option.Point{
+		X: random.RandInt(5, cWidth/2),
+		Y: y,
 	}
-
-	if dzdType == DeadZoneDirectionTypeTop {
-		point.X = random.RandInt(5, maxX)
-		point.Y = 5
-	} else if dzdType == DeadZoneDirectionTypeBottom {
-		point.X = random.RandInt(5, maxX)
-		point.Y = height - cHeight - 5
-	} else if dzdType == DeadZoneDirectionTypeLeft {
-		point.X = 5
-		point.Y = random.RandInt(5, height-cHeight-5)
-	} else if dzdType == DeadZoneDirectionTypeRight {
+	if point.X > maxX {
 		point.X = maxX
-		point.Y = random.RandInt(5, height-cHeight-5)
 	}
-
 	return blocks, point
 }
 
-// calcXWithDeadZone calculates the X coordinate range (considering dead zone)
-// params:
-//   - start: Start X coordinate
-//   - end: End X coordinate
-//   - value: Block width
-//   - dzdType: Dead zone direction
-//
-// returns:
-//   - int: Adjusted start X coordinate
-//   - int: Adjusted end X coordinate
-func (c *captcha) calcXWithDeadZone(start, end, value int, dzdType DeadZoneDirectionType) (int, int) {
-	if dzdType == DeadZoneDirectionTypeLeft {
-		start += value
-		end += value
-	}
-	return start, end
-}
-
-// calcYWithDeadZone calculates the Y coordinate (considering dead zone)
-// params:
-//   - start: Start Y coordinate
-//   - end: End Y coordinate
-//   - value: Block height
-//   - dzdType: Dead zone direction
-//
-// return: Random Y coordinate
-func (c *captcha) calcYWithDeadZone(start, end, value int, dzdType DeadZoneDirectionType) int {
-	if dzdType == DeadZoneDirectionTypeTop {
-		start += value
-	} else if dzdType == DeadZoneDirectionTypeBottom {
-		end -= value
-	}
-	return random.RandInt(start, end)
-}
-
-// check checks the CAPTCHA parameters
-// return: Error information
 func (c *captcha) check() error {
 	for _, tile := range c.resources.rangGraphImage {
 		if tile.OverlayImage == nil {

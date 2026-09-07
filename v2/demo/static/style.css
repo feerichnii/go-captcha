@@ -92,13 +92,9 @@ html, body {
     drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
 }
 
-/* Drag-drop tile must receive pointer events */
-.card[data-kind="drag"] .tile {
+.card[data-kind="slide"] .tile {
   pointer-events: auto;
   cursor: grab;
-}
-.card[data-kind="drag"] .tile.dragging {
-  cursor: grabbing;
 }
 
 .card[data-kind="rotate"] .stage {

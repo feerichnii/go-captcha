@@ -10,20 +10,10 @@ import (
 	"github.com/feerichnii/go-captcha/v2/base/option"
 )
 
-type DeadZoneDirectionType int
-
-const (
-	DeadZoneDirectionTypeLeft DeadZoneDirectionType = iota
-	DeadZoneDirectionTypeRight
-	DeadZoneDirectionTypeTop
-	DeadZoneDirectionTypeBottom
-)
-
 // Options .
 type Options struct {
-	imageSize               *option.Size
-	imageAlpha              float32
-	rangeDeadZoneDirections []DeadZoneDirectionType
+	imageSize  *option.Size
+	imageAlpha float32
 
 	rangeGraphSize            *option.RangeVal
 	rangeGraphAnglePos        []*option.RangeVal
@@ -67,11 +57,6 @@ func (o *Options) GetRangeGraphSize() *option.RangeVal {
 // GetGenGraphNumber returns how many drop slots are drawn (default 3).
 func (o *Options) GetGenGraphNumber() int {
 	return o.genGraphNumber
-}
-
-// GetRangeDeadZoneDirections .
-func (o *Options) GetRangeDeadZoneDirections() []DeadZoneDirectionType {
-	return o.rangeDeadZoneDirections
 }
 
 type Option func(*Options)
@@ -135,16 +120,10 @@ func WithGenGraphNumber(val int) Option {
 	}
 }
 
-// WithEnableGraphVerticalRandom .
+// WithEnableGraphVerticalRandom allows each drop slot to pick its own Y.
+// Default false: all notches share one Y so a horizontal slider can solve it.
 func WithEnableGraphVerticalRandom(val bool) Option {
 	return func(opts *Options) {
 		opts.enableGraphVerticalRandom = val
-	}
-}
-
-// WithRangeDeadZoneDirections .
-func WithRangeDeadZoneDirections(val []DeadZoneDirectionType) Option {
-	return func(opts *Options) {
-		opts.rangeDeadZoneDirections = val
 	}
 }
