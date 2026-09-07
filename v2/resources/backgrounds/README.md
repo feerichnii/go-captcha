@@ -4,23 +4,25 @@ Readable, landmark-rich backgrounds for GoCaptcha masters. Dense color and
 texture across the frame help humans match the slide tile by image alignment;
 all drop slots share the same silhouette, so visual content is the cue.
 
-| File              | Theme                                         |
-|-------------------|-----------------------------------------------|
-| `bg_meadow.png`   | Sunny meadow, path, and a single tree         |
-| `bg_lakeside.png` | Calm lake with pier and distant hills         |
-| `bg_desert.png`   | Golden dunes with soft shadows                |
-| `bg_flowers.png`  | Large blooms on a soft garden blur            |
-| `bg_coast.png`    | Beach bands: sky, turquoise water, sand       |
-| `bg_fruit.png`    | Dense fruit market colors                     |
-| `bg_toys.png`     | Colorful wooden toys on a patterned quilt     |
-| `bg_forest.png`   | Autumn forest path with leaf cover            |
+| File                   | Theme                                              |
+|------------------------|----------------------------------------------------|
+| `bg_reef.png`          | Underwater reef with turtles, rays, and ruins      |
+| `bg_underwater.png`    | Coral canyon leading to a sunken temple            |
+| `bg_neon_city.png`     | Neon cyberpunk canyon with screens and drone       |
+| `bg_crystal_city.png`  | Futuristic city with floating crystals             |
+| `bg_rooftops.png`      | Sunny East Asian rooftops, lanterns, and market    |
+| `bg_riverside.png`     | Riverside town with boats and mountain backdrop    |
+| `bg_matsuri.png`       | Night festival stalls, lanterns, and goldfish tubs |
+| `bg_winter_fair.png`   | Snowy Russian fair with carousel and onion domes   |
+| `bg_picnic.png`        | Garden picnic with animals, quilt, and treehouse   |
 
-All images are `720x540` RGB PNG. The library randomly crops a master-sized region
-(default `300x220`) from each background, so larger source images add positional variety.
+All images are square RGB PNG (1024×1024 or 1536×1536). The library randomly
+crops a master-sized region (default `300x220`) from each background, so larger
+source images add positional variety.
 
 ## Usage
 
 ```go
-bg, _ := codec.DecodeByteToPng(mustRead("bg_fruit.png"))
+bg, _ := codec.DecodeByteToPng(mustRead("bg_reef.png"))
 builder.SetResources(slide.WithBackgrounds([]image.Image{bg}))
 ```

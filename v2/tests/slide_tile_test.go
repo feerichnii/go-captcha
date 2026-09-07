@@ -22,12 +22,12 @@ func init() {
 	//slide.WithEnableGraphVerticalRandom(true),
 	)
 
-	bgImage, err := loadPng("../resources/backgrounds/bg_meadow.png")
+	bgImage, err := loadPng("../resources/backgrounds/bg_picnic.png")
 	if err != nil {
 		log.Fatalln(err)
 	}
 
-	bgImage1, err := loadPng("../resources/backgrounds/bg_lakeside.png")
+	bgImage1, err := loadPng("../resources/backgrounds/bg_riverside.png")
 	if err != nil {
 		log.Fatalln(err)
 	}
