@@ -13,6 +13,14 @@ const ab = new AntiBotClient({
 const MASTER_W = 300;
 const MASTER_H = 220;
 
+/** Same clock as TrajectoryTracker (performance.timeOrigin + now). */
+function nowMs() {
+  if (typeof performance !== "undefined" && performance.now) {
+    return performance.timeOrigin + performance.now();
+  }
+  return Date.now();
+}
+
 function $(sel, root = document) {
   return root.querySelector(sel);
 }
@@ -66,23 +74,47 @@ function renderChallenge(card, ch) {
     const pub = ch.public || {};
     const parent = pub.parent_width || pub.parentWidth || 220;
     const tw = pub.width || 150;
+    const th = pub.height || tw;
     const ratio = Math.max(0.4, Math.min(0.95, tw / parent));
     thumb.style.width = `${ratio * 100}%`;
     thumb.style.height = `${ratio * 100}%`;
     thumb.style.transform = "translate(-50%, -50%) rotate(0deg)";
     const track = $(".track", card);
     track.value = 0;
+    // Same pattern as slide: track owns moves, relative:false, synthetic arm/points.
+    card._tracker = new TrajectoryTracker(track, { relative: false }).start();
+    const armRotate = () => {
+      if (!card._tracker.piece_down) {
+        const t = Math.round(nowMs());
+        card._tracker.piece_down = { x: tw / 2, y: th / 2, t };
+        card._tracker._armed = true;
+        if (card._tracker.events.length < card._tracker.maxEvents) {
+          card._tracker.events.push("pointerdown");
+        }
+      }
+    };
+    track.addEventListener("pointerdown", armRotate);
     track.oninput = () => {
+      armRotate();
       const angle = Number(track.value);
       card._pos.angle = angle;
       thumb.style.transform = `translate(-50%, -50%) rotate(${angle}deg)`;
-    };
-    card._tracker = new TrajectoryTracker(track).start();
-    track.addEventListener("pointerdown", () => {
-      if (!card._tracker.piece_down) {
-        card._tracker.piece_down = { x: 8, y: 8, t: Date.now() };
-        card._tracker._armed = true;
+      const tr = card._tracker;
+      if (tr && tr._armed && tr.points.length < tr.maxPoints) {
+        tr.points.push({
+          x: angle,
+          y: th / 2,
+          t: Math.round(nowMs()),
+          pointer_type: "mouse",
+          buttons: 1,
+          pressure: 0.5,
+        });
+        if (tr.events.length < tr.maxEvents) tr.events.push("pointermove");
       }
+    };
+    track.addEventListener("pointerup", () => {
+      const tr = card._tracker;
+      if (tr && tr.events.length < tr.maxEvents) tr.events.push("pointerup");
     });
     return;
   }
@@ -120,7 +152,7 @@ function renderChallenge(card, ch) {
     const armAndMove = () => {
       // Simulate piece press for antibot if user uses the track directly
       if (!card._tracker.piece_down) {
-        const t = Date.now();
+        const t = Math.round(nowMs());
         card._tracker.piece_down = { x: tw / 2, y: th / 2, t };
         card._tracker._armed = true;
         card._tracker.events.push("pointerdown");
@@ -138,7 +170,7 @@ function renderChallenge(card, ch) {
         tr.points.push({
           x: Number(track.value),
           y: dy,
-          t: Date.now(),
+          t: Math.round(nowMs()),
           pointer_type: "mouse",
           buttons: 1,
           pressure: 0.5,
@@ -200,7 +232,7 @@ async function verifyCard(card) {
     if (snap.points?.length >= 2 && (!snap.events || snap.events.length < 3)) {
       snap.events = ["pointerdown", "pointermove", "pointerup"];
     }
-    if (!snap.piece_down && (kind === "slide" || kind === "drag") && snap.points?.length) {
+    if (!snap.piece_down && (kind === "slide" || kind === "drag" || kind === "rotate") && snap.points?.length) {
       const p0 = snap.points[0];
       snap.piece_down = { x: 10, y: 10, t: p0.t - 20 };
     }
