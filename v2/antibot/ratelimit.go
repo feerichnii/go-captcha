@@ -2,7 +2,9 @@ package antibot
 
 import (
 	"context"
+	"errors"
 	"net/netip"
+	"strconv"
 )
 
 func (l *Layer) checkRateHash(ctx context.Context, bucket, idHash string, max int) error {
@@ -15,6 +17,27 @@ func (l *Layer) checkRateHash(ctx context.Context, bucket, idHash string, max in
 		return wrapStore(err)
 	}
 	if n > int64(max) {
+		return ErrRateLimited
+	}
+	return nil
+}
+
+// peekRateHash rejects when the counter is already at/above max without incrementing.
+// Used by PreflightIssue so a later Issue can still Incr once.
+func (l *Layer) peekRateHash(ctx context.Context, bucket, idHash string, max int) error {
+	if max <= 0 || idHash == "" {
+		return nil
+	}
+	key := l.cfg.KeyPrefix + bucket + ":" + idHash
+	raw, err := l.store.Get(ctx, key)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return wrapStore(err)
+	}
+	n, _ := strconv.ParseInt(string(raw), 10, 64)
+	if n >= int64(max) {
 		return ErrRateLimited
 	}
 	return nil
@@ -34,6 +57,22 @@ func (l *Layer) CheckIssueRate(ctx context.Context, clientKey, ipHash string) er
 		}
 	}
 	return l.checkRateHash(ctx, "rlig", "global", l.cfg.GlobalIssueRateMax)
+}
+
+// PeekIssueRate reports whether Issue would be rate-limited without consuming a slot.
+func (l *Layer) PeekIssueRate(ctx context.Context, clientKey, ipHash string) error {
+	if clientKey == "" {
+		return ErrInvalidRequest
+	}
+	if err := l.peekRateHash(ctx, "rli", hashClient(clientKey), l.cfg.IssueRateMax); err != nil {
+		return err
+	}
+	if ipHash != "" {
+		if err := l.peekRateHash(ctx, "rliip", ipHash, l.cfg.IssueRateMax); err != nil {
+			return err
+		}
+	}
+	return l.peekRateHash(ctx, "rlig", "global", l.cfg.GlobalIssueRateMax)
 }
 
 // CheckVerifyRate applies hard verify limits: session, exact IP /32, global.

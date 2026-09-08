@@ -48,12 +48,6 @@ func newLayer(t *testing.T, cfg Config) (*Layer, *fakeClock) {
 	// covered by dedicated tests that call New() without these opt-outs.
 	cfg.AllowNonBrowser = true
 	cfg.AllowMissingPiecePress = true
-	if cfg.StretchPoWRiskMin == 0 {
-		cfg.StretchPoWRiskMin = -1 // disable stretch PoW in unit tests unless opted in
-	}
-	if cfg.DisableReplayCheck == false && !cfg.DisableSessionWarmup {
-		// keep replay on by default; fine for tests
-	}
 	cfg.DisableSessionWarmup = true
 	l, err := New(NewMemoryStore(), cfg)
 	if err != nil {

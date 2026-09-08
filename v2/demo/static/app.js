@@ -286,7 +286,7 @@ async function verifyCard(card) {
       setTimeout(() => issueCard(card), 700);
     } else {
       const retry = Number(res.data?.retry_after_ms || 0);
-      const errName = res.data?.error || "";
+      const errName = res.data?.error_code || res.data?.error || "";
       if (retry > 0) {
         card._lockedUntil = Date.now() + retry;
         setStatus(card, `${errName || "ошибка"} — пауза ${Math.ceil(retry / 1000)}с`, false);
@@ -299,7 +299,7 @@ async function verifyCard(card) {
           await issueCard(card);
         }
       } else {
-        setStatus(card, `ошибка (${res.status})`, false);
+        setStatus(card, `ошибка (${errName || res.status})`, false);
         setTimeout(() => issueCard(card), 900);
       }
     }

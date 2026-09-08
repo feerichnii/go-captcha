@@ -15,6 +15,7 @@ const MaxPoWDifficulty = 32
 
 const (
 	PoWKindSHA256  = "sha256"
+	// PoWKindStretch is experimental — not issued by default (StretchPoWRiskMin=0).
 	PoWKindStretch = "stretch"
 )
 

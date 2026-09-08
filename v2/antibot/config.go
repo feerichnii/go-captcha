@@ -147,12 +147,14 @@ type Config struct {
 	// ReplayTTL how long a traj fingerprint blocks reuse (default = FailRateWindow).
 	ReplayTTL time.Duration
 
-	// StretchPoWRiskMin enables memory-stretch PoW at/above this risk (0 = off; default 3).
-	// Negative disables. Stretch is optional high-risk mode — SHA-256 remains default.
+	// StretchPoWRiskMin enables experimental memory-stretch PoW at/above this risk.
+	// 0 = off (default). Negative also disables. Stretch is not production-ready:
+	// keep at 0 until a redesigned algo ships; SHA-256 remains the only default PoW.
+	// Even when > 0, Issue only selects stretch if the client advertises "stretch-v2".
 	StretchPoWRiskMin int
-	// StretchMemoryMB buffer size for stretch PoW (default 8, max 32).
+	// StretchMemoryMB buffer size for stretch PoW (default 8, max 32). Experimental.
 	StretchMemoryMB int
-	// StretchRounds fill/hash rounds (default 2).
+	// StretchRounds fill/hash rounds (default 2). Experimental.
 	StretchRounds int
 
 	// ReputationProvider optional external DeviceKey/account reputation (soft risk).
@@ -272,10 +274,10 @@ func (c *Config) withDefaults() Config {
 	setInt(&out.HardModeExtraPoWBits, 2)
 	setInt(&out.HardModeSlotsMin, 6)
 	setDur(&out.ReplayTTL, out.FailRateWindow)
-	if c.StretchPoWRiskMin == 0 {
-		out.StretchPoWRiskMin = 3
+	// StretchPoWRiskMin: 0 (unset) and negative = off. Do not coerce 0 → default on.
+	if c.StretchPoWRiskMin < 0 {
+		out.StretchPoWRiskMin = 0
 	}
-	// StretchPoWRiskMin < 0 disables.
 	setInt(&out.StretchMemoryMB, 8)
 	if out.StretchMemoryMB > 32 {
 		out.StretchMemoryMB = 32

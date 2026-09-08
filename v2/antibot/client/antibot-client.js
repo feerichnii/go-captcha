@@ -513,7 +513,26 @@ export async function solvePoW(powOrSalt, difficulty, opts = {}) {
  *
  *   POST issueUrl  → { id, expires_at, ttl_seconds, pow?, js_challenge?, ... }
  *   POST verifyUrl ← { id, answer, trajectory, pow_nonce, browser }  → 2xx on success
+ *
+ * Challenge objects from issue() carry local lifecycle flags:
+ *   _verifyInFlight — single-flight guard
+ *   _terminal — set after success / bad_geometry / locked / not_found / low_score
  */
+
+const DEFAULT_CAPABILITIES = Object.freeze({
+  protocol: 1,
+  pow: Object.freeze(["sha256-v1"]),
+});
+
+/** Terminal API error_code values — challenge must not be re-verified. */
+const TERMINAL_ERROR_CODES = new Set([
+  "bad_geometry",
+  "bad_answer", // legacy demo wording
+  "locked",
+  "not_found",
+  "low_score",
+]);
+
 export class AntiBotClient {
   /**
    * @param {object} cfg
@@ -523,6 +542,7 @@ export class AntiBotClient {
    * @param {Record<string,string>} [cfg.headers]
    * @param {(pow:{salt:string,difficulty:number})=>void} [cfg.onPoWStart]
    * @param {()=>void} [cfg.onPoWDone]
+   * @param {{protocol?:number,pow?:string[]}} [cfg.capabilities]
    */
   constructor(cfg) {
     this.issueUrl = cfg.issueUrl;
@@ -531,6 +551,7 @@ export class AntiBotClient {
     this.headers = cfg.headers ?? {};
     this.onPoWStart = cfg.onPoWStart;
     this.onPoWDone = cfg.onPoWDone;
+    this.capabilities = cfg.capabilities ?? DEFAULT_CAPABILITIES;
   }
 
   async _post(url, body) {
@@ -553,21 +574,40 @@ export class AntiBotClient {
   /**
    * Request a challenge. If the server attaches PoW, start solving it in the
    * background immediately so it overlaps with the user's interaction.
+   * Advertises capabilities so the server never issues an unsupported PoW algo.
    */
   async issue(params = {}) {
-    const { ok, status, data } = await this._post(this.issueUrl, params);
+    const body = {
+      ...params,
+      capabilities: params.capabilities ?? this.capabilities,
+    };
+    const { ok, status, data } = await this._post(this.issueUrl, body);
     if (!ok) {
+      const code = data?.error_code || data?.error;
       const err = new Error(
-        data?.error
-          ? `antibot: ${data.error}${data.retry_after_ms ? ` (retry_after_ms=${data.retry_after_ms})` : ""}`
+        code
+          ? `antibot: ${code}${data.retry_after_ms ? ` (retry_after_ms=${data.retry_after_ms})` : ""}`
           : `antibot: issue failed (${status})`
       );
       err.status = status;
       err.data = data;
+      err.error_code = code;
       err.retry_after_ms = data?.retry_after_ms;
       throw err;
     }
-    const ch = { ...data, _powPromise: null, _browser: collectBrowserSignals() };
+    // Refuse to solve stretch in the browser until stretch-v2 is redesigned.
+    if (data.pow?.kind === "stretch") {
+      const err = new Error("antibot: stretch PoW is not supported by this client");
+      err.error_code = "unsupported_pow";
+      throw err;
+    }
+    const ch = {
+      ...data,
+      _powPromise: null,
+      _browser: collectBrowserSignals(),
+      _verifyInFlight: false,
+      _terminal: null,
+    };
     if (data.js_challenge) {
       ch._jsPromise = solveJSChallenge(data.js_challenge, ch._browser);
       ch._jsPromise.catch(() => {});
@@ -582,26 +622,55 @@ export class AntiBotClient {
 
   /**
    * Submit the answer with trajectory, browser signals and PoW nonce.
+   * Single-flight: concurrent/repeat verify of the same challenge is rejected locally.
    * @param {object} ch          object returned by issue()
    * @param {object} answer      antibot.SlideSubmit | RotateSubmit shape
    * @param {{points:any[],events:string[],coalesced_total?:number}} trajectory
    */
   async verify(ch, answer, trajectory) {
-    const pow_nonce = ch._powPromise ? await ch._powPromise : undefined;
-    const browser = { ...(ch._browser || collectBrowserSignals()) };
-    if (trajectory?.coalesced_total != null) browser.coalesced_total = trajectory.coalesced_total;
-    if (ch._jsPromise) browser.js_challenge_response = await ch._jsPromise;
-    return this._post(this.verifyUrl, {
-      id: ch.id,
-      answer,
-      trajectory: {
-        points: trajectory?.points ?? [],
-        events: trajectory?.events ?? [],
-        piece_down: trajectory?.piece_down,
-      },
-      pow_nonce,
-      browser,
-    });
+    if (!ch || !ch.id) {
+      const err = new Error("antibot: missing challenge");
+      err.error_code = "invalid_request";
+      throw err;
+    }
+    if (ch._terminal) {
+      const err = new Error(`antibot: challenge already ${ch._terminal}`);
+      err.error_code = "already_terminal";
+      err.terminal = ch._terminal;
+      throw err;
+    }
+    if (ch._verifyInFlight) {
+      const err = new Error("antibot: verify already in flight");
+      err.error_code = "in_flight";
+      throw err;
+    }
+    ch._verifyInFlight = true;
+    try {
+      const pow_nonce = ch._powPromise ? await ch._powPromise : undefined;
+      const browser = { ...(ch._browser || collectBrowserSignals()) };
+      if (trajectory?.coalesced_total != null) browser.coalesced_total = trajectory.coalesced_total;
+      if (ch._jsPromise) browser.js_challenge_response = await ch._jsPromise;
+      const res = await this._post(this.verifyUrl, {
+        id: ch.id,
+        answer,
+        trajectory: {
+          points: trajectory?.points ?? [],
+          events: trajectory?.events ?? [],
+          piece_down: trajectory?.piece_down,
+        },
+        pow_nonce,
+        browser,
+      });
+      const code = res.data?.error_code || res.data?.error || "";
+      if (res.ok) {
+        ch._terminal = "success";
+      } else if (TERMINAL_ERROR_CODES.has(code)) {
+        ch._terminal = code === "bad_answer" ? "bad_geometry" : code;
+      }
+      return res;
+    } finally {
+      ch._verifyInFlight = false;
+    }
   }
 }
 

@@ -57,6 +57,22 @@ func New(store Store, cfg Config, opts ...Option) (*Layer, error) {
 	return l, nil
 }
 
+// ClientCapabilities is advertised by the browser on Issue so the server never
+// selects a PoW (or future feature) the client cannot solve.
+type ClientCapabilities struct {
+	// Protocol is the client wire version (0/omitted → treat as 1).
+	Protocol int `json:"protocol,omitempty"`
+	// PoW lists supported algorithms, e.g. ["sha256-v1"]. Unknown names ignored.
+	PoW []string `json:"pow,omitempty"`
+}
+
+// PoW algorithm capability tokens (client ↔ server negotiation).
+const (
+	PoWAlgoSHA256V1  = "sha256-v1"
+	PoWAlgoStretchV2 = "stretch-v2" // experimental; not issued unless opted in + advertised
+	ProtocolVersion  = 1
+)
+
 // IssueRequest creates a new challenge from a generated captcha answer.
 type IssueRequest struct {
 	Kind string // slide | rotate
@@ -68,6 +84,8 @@ type IssueRequest struct {
 	Signals ClientSignals
 	// Browser is optional client-reported environment hints (untrusted).
 	Browser BrowserSignals
+	// Capabilities from the client; empty PoW list means SHA-256 v1 only.
+	Capabilities ClientCapabilities
 	// Suspicious forces at least risk level 1 (PoW) for this challenge.
 	Suspicious bool
 	// PreferInvisible requests signals-only flow when EnableInvisible and risk allows.
@@ -156,6 +174,42 @@ func (l *Layer) requireIPHash(signals ClientSignals) (netip.Addr, string, error)
 	return addr, HashIP(l.cfg.SecretKey, addr), nil
 }
 
+// PreflightIssue checks freeze, rate peek, IP, and browser UA before expensive
+// captcha image generation. Call this from HTTP handlers before slide/rotate.Generate.
+// It does not consume an Issue rate slot (Issue still Incr's).
+func (l *Layer) PreflightIssue(ctx context.Context, clientKey string, signals ClientSignals) error {
+	if err := validateClientKey(clientKey); err != nil {
+		return err
+	}
+	_, ipHash, err := l.requireIPHash(signals)
+	if err != nil {
+		return err
+	}
+	if err := l.CheckFrozen(ctx, ipHash); err != nil {
+		return err
+	}
+	if err := l.PeekIssueRate(ctx, clientKey, ipHash); err != nil {
+		return err
+	}
+	if l.cfg.RequireBrowser() && LooksLikeNonBrowserUA(signals.UserAgent) {
+		return ErrBrowserRequired
+	}
+	return nil
+}
+
+// clientSupportsPoW reports whether caps advertise algo (empty PoW → sha256-v1 only).
+func clientSupportsPoW(caps ClientCapabilities, algo string) bool {
+	if len(caps.PoW) == 0 {
+		return algo == PoWAlgoSHA256V1
+	}
+	for _, a := range caps.PoW {
+		if a == algo {
+			return true
+		}
+	}
+	return false
+}
+
 // Issue stores a challenge and returns a public id (+ PoW when the client is risky).
 func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
 	if err := validateClientKey(req.ClientKey); err != nil {
@@ -163,6 +217,9 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	}
 	addr, ipHash, err := l.requireIPHash(req.Signals)
 	if err != nil {
+		return nil, err
+	}
+	if err := l.CheckFrozen(ctx, ipHash); err != nil {
 		return nil, err
 	}
 	if err := l.CheckIssueRate(ctx, req.ClientKey, ipHash); err != nil {
@@ -257,9 +314,13 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 			diff = 10
 		}
 	}
+	// Production PoW is SHA-256. Stretch is experimental: only if explicitly
+	// enabled (StretchPoWRiskMin > 0), risk qualifies, AND the client advertised stretch-v2.
 	powKind := PoWKindSHA256
 	memMB, rounds := 0, 0
-	if l.cfg.StretchPoWRiskMin > 0 && level >= l.cfg.StretchPoWRiskMin {
+	if l.cfg.StretchPoWRiskMin > 0 &&
+		level >= l.cfg.StretchPoWRiskMin &&
+		clientSupportsPoW(req.Capabilities, PoWAlgoStretchV2) {
 		powKind = PoWKindStretch
 		memMB = l.cfg.StretchMemoryMB
 		rounds = l.cfg.StretchRounds
@@ -269,6 +330,9 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		if diff < 6 {
 			diff = 6
 		}
+	} else if diff > 0 && !clientSupportsPoW(req.Capabilities, PoWAlgoSHA256V1) {
+		// Client declared PoW list without sha256-v1 and stretch not selected → no PoW.
+		diff = 0
 	}
 	var powOut *PoWChallenge
 	if diff > 0 {
@@ -477,7 +541,6 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}
 
 	// 2. Tech gates — failures keep the challenge.
-	geoStart := l.now()
 	elapsed := nowMs - rec.CreatedAtMs
 	ev.ElapsedMs = elapsed
 	ev.TrajectoryMs = req.Trajectory.DurationMs()
@@ -560,6 +623,7 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	ev.RiskLevelBefore = levelBefore
 
 	// 3. Atomic geometry claim (consumes challenge + IP geo lock).
+	geoStart := l.now()
 	claim, err := l.ClaimGeometry(ctx, req.ID, hash, ipHash)
 	if err != nil {
 		return fail(err)
@@ -611,14 +675,35 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 	}
 	tol := Tolerance{Slide: l.cfg.SlidePadding, Rotate: l.cfg.RotatePadding}
 	if !l.checker(rec.Kind, plain, req.Answer, tol) {
-		retry, _ := l.FinalizeFailure(ctx, hash, ipHash, claim.ClaimToken)
-		dec, _ := l.EvaluateRisk(ctx, hash, RiskInputs{
+		retry, err := l.FinalizeFailure(ctx, hash, ipHash, claim.ClaimToken)
+		if err != nil {
+			return fail(wrapStore(err))
+		}
+		dec, err := l.EvaluateRisk(ctx, hash, RiskInputs{
 			Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
 			Signals: req.Signals, Failed: true, NowMs: nowMs,
 		})
+		if err != nil {
+			return fail(err)
+		}
 		ev.RiskLevelAfter = dec.LevelAfter
 		ev.Outcome = outcomeName(ErrBadAnswer)
 		return nil, &BadAnswerError{RetryAfterMs: retry}
+	}
+
+	// HardRejectScore: geometry was correct but behavior score is below threshold.
+	// Challenge is already consumed; abort geo lock (no freeze) and do not FinalizeSuccess.
+	if l.cfg.HardRejectScore > 0 && sr.Score < l.cfg.HardRejectScore {
+		_ = l.FinalizeAbort(ctx, ipHash, claim.ClaimToken)
+		dec, err := l.EvaluateRisk(ctx, hash, RiskInputs{
+			Score: sr, BrowserDelta: bDelta, BrowserReasons: bReasons,
+			Signals: req.Signals, Failed: true, NowMs: nowMs,
+		})
+		if err != nil {
+			return fail(err)
+		}
+		ev.RiskLevelAfter = dec.LevelAfter
+		return fail(ErrLowScore)
 	}
 
 	if err := l.FinalizeSuccess(ctx, ipHash, claim.ClaimToken); err != nil {
@@ -638,10 +723,6 @@ func (l *Layer) Verify(ctx context.Context, req VerifyRequest) (*VerifyResult, e
 		l.clearWarmup(ctx, hash)
 	}
 	ev.RiskLevelAfter = dec.LevelAfter
-
-	if l.cfg.HardRejectScore > 0 && sr.Score < l.cfg.HardRejectScore {
-		return fail(ErrLowScore)
-	}
 
 	ev.Outcome = "ok"
 	return &VerifyResult{

@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/rand"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -76,7 +75,8 @@ func main() {
 		_ = antibot.AssertBrowserHeaders(r) // soft in browsers; demos often lack Sec-Fetch in file:// — ignore empty
 
 		var in struct {
-			Kind string `json:"kind"` // slide | rotate
+			Kind         string                     `json:"kind"` // slide | rotate
+			Capabilities antibot.ClientCapabilities `json:"capabilities"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&in)
 		if in.Kind == "" {
@@ -89,6 +89,12 @@ func main() {
 			return
 		}
 		signals := antibot.SignalsFromRequestTrusted(r, sess, trustedProxies)
+
+		// Cheap gates before image generation (frozen / rate / UA).
+		if err := layer.PreflightIssue(r.Context(), sess.ClientKey, signals); err != nil {
+			writeErr(w, err)
+			return
+		}
 
 		var (
 			kind    string
@@ -126,10 +132,11 @@ func main() {
 		}
 
 		iss, err := layer.Issue(r.Context(), antibot.IssueRequest{
-			Kind:      kind,
-			Answer:    answer,
-			ClientKey: sess.ClientKey,
-			Signals:   signals,
+			Kind:         kind,
+			Answer:       answer,
+			ClientKey:    sess.ClientKey,
+			Signals:      signals,
+			Capabilities: in.Capabilities,
 		})
 		if err != nil {
 			writeErr(w, err)
@@ -206,25 +213,23 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 func writeErr(w http.ResponseWriter, err error) {
 	retry := antibot.RetryAfterMs(err)
-	code := http.StatusInternalServerError
-	msg := "captcha unavailable"
-	switch {
-	case errors.Is(err, antibot.ErrRateLimited):
-		code = http.StatusTooManyRequests
-		msg = "too many requests"
-	case errors.Is(err, antibot.ErrLocked):
-		code = http.StatusForbidden
-		msg = "locked"
-	case errors.Is(err, antibot.ErrBadAnswer):
-		code = http.StatusForbidden
-		msg = "bad_answer"
-	case antibot.IsClientError(err):
-		code = http.StatusForbidden
-		msg = "captcha failed"
+	code := antibot.ErrorCode(err)
+	httpStatus := http.StatusInternalServerError
+	switch code {
+	case antibot.CodeRateLimited:
+		httpStatus = http.StatusTooManyRequests
+	case antibot.CodeInternal:
+		httpStatus = http.StatusInternalServerError
+	default:
+		httpStatus = http.StatusForbidden
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	out := map[string]any{"error": msg, "detail": err.Error()}
+	w.WriteHeader(httpStatus)
+	out := map[string]any{
+		"error":      code,
+		"error_code": code,
+		"detail":     err.Error(),
+	}
 	if retry > 0 {
 		out["retry_after_ms"] = retry
 	}

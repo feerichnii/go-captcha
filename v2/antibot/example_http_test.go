@@ -3,7 +3,6 @@ package antibot_test
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"time"
 
@@ -40,6 +39,16 @@ func Example_httpHandlers() {
 		}
 		signals := antibot.SignalsFromRequest(r, sess)
 
+		var in struct {
+			Capabilities antibot.ClientCapabilities `json:"capabilities"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&in)
+
+		if err := layer.PreflightIssue(r.Context(), sess.ClientKey, signals); err != nil {
+			writeErr(w, err)
+			return
+		}
+
 		data, err := capt.Generate()
 		if err != nil {
 			http.Error(w, "captcha unavailable", http.StatusInternalServerError)
@@ -47,10 +56,11 @@ func Example_httpHandlers() {
 		}
 		answer, _ := json.Marshal(data.GetData()) // secret: goes only to Issue
 		iss, err := layer.Issue(r.Context(), antibot.IssueRequest{
-			Kind:      antibot.KindSlide,
-			Answer:    answer,
-			ClientKey: sess.ClientKey,
-			Signals:   signals,
+			Kind:         antibot.KindSlide,
+			Answer:       answer,
+			ClientKey:    sess.ClientKey,
+			Signals:      signals,
+			Capabilities: in.Capabilities,
 		})
 		if err != nil {
 			writeErr(w, err)
@@ -115,15 +125,22 @@ func Example_httpHandlers() {
 	_ = context.Background()
 }
 
-// writeErr shows one generic message to users; the typed error is for logs.
+// writeErr returns machine-readable error_code; typed errors stay for logs.
 func writeErr(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, antibot.ErrRateLimited):
-		http.Error(w, "too many requests", http.StatusTooManyRequests)
-	case antibot.IsClientError(err):
-		http.Error(w, "captcha failed", http.StatusForbidden)
-	default:
-		// log.Printf("captcha internal: %v", err)
-		http.Error(w, "captcha unavailable", http.StatusInternalServerError)
+	code := antibot.ErrorCode(err)
+	retry := antibot.RetryAfterMs(err)
+	status := http.StatusForbidden
+	switch code {
+	case antibot.CodeRateLimited:
+		status = http.StatusTooManyRequests
+	case antibot.CodeInternal:
+		status = http.StatusInternalServerError
 	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	out := map[string]any{"error": code, "error_code": code, "detail": err.Error()}
+	if retry > 0 {
+		out["retry_after_ms"] = retry
+	}
+	_ = json.NewEncoder(w).Encode(out)
 }

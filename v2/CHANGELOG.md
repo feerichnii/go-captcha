@@ -4,6 +4,14 @@ All notable changes to go-captcha v2 (AntiBot + captcha packages) are documented
 
 ## Unreleased
 
+### AntiBot P0.2
+- `StretchPoWRiskMin=0` is truly off (default); stretch issuance requires opt-in + client `stretch-v2` capability
+- Client `capabilities.pow` negotiation (`sha256-v1`); JS client single-flight verify + terminal challenge state
+- Machine-readable `ErrorCode` / `error_code` in demo + example HTTP handlers
+- `PreflightIssue` before image generation; Issue also checks freeze early
+- Do not ignore `FinalizeFailure` / `EvaluateRisk` errors on bad geometry
+- `GeometryDurationMs` timed from ClaimGeometry only; `HardRejectScore` checked before FinalizeSuccess
+
 ### Docs
 - Expand `v2/antibot/README.md`: decision flow, hard vs soft checks, delays/TTLs, risk/PoW
 - Sync root `README.md` AntiBot section (drop MaxAttempts=3 / attempt-caps wording)

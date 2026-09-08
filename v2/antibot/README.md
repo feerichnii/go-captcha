@@ -105,11 +105,15 @@ Parallel verifies on same `/32`: one wins; others busy/`ErrLocked`/`ErrNotFound`
 |---------|--------|
 | Decrypt / internal error | **`FinalizeAbort`** — release geo only (no freeze/risk/epoch) |
 | Wrong geometry | **`FinalizeFailureAtomic`** — `badgeo++`, freeze, bind lock, IP risk++, **epoch++**, delete geo → `ErrBadAnswer` + `retry_after_ms` |
+| Correct geometry but `HardRejectScore` fail | **`FinalizeAbort`** + risk as Failed → `ErrLowScore` (no success, no freeze) |
 | Correct geometry / invisible OK | **`FinalizeSuccess`** — release geo; record traj fingerprint; evaluate risk; clear warmup only if **clean** |
 
 ### 7. Optional hard reject
-If `HardRejectScore > 0` and behavior score &lt; threshold → `ErrLowScore` (default **off**).
+If `HardRejectScore > 0` and behavior score &lt; threshold, reject **before** `FinalizeSuccess` (default **off**). Challenge is already consumed by claim.
 
+HTTP helpers should surface `ErrorCode(err)` as `error_code` (`pow_invalid`, `js_failed`, `too_fast`, `bad_geometry`, `locked`, `not_found`, `rate_limited`, `low_score`, …).
+
+Call **`PreflightIssue`** before expensive image generation to fail frozen/rate-limited clients early.
 ---
 
 ## How risk / PoW decisions are made
@@ -130,7 +134,7 @@ Rough sum (clamped to `MaxRiskLevel`):
 | risk ≥ 1 | `PoWBaseDifficulty` **14** + `(level-1)*2`, cap **22**, +0..`PoWJitterBits` (1) |
 | risk 0 | ~**8%** probe at difficulty **10** (`PoWProbeProb`) |
 | Hard Mode | +`HardModeExtraPoWBits` (**2**), TTL × **0.5** |
-| risk ≥ `StretchPoWRiskMin` (**3**) | optional `kind=stretch` memory mix (still leading-zero bits) |
+| risk ≥ `StretchPoWRiskMin` (**0** = off) | experimental `kind=stretch` — **disabled by default**; requires client `stretch-v2` capability |
 | Invisible | at least probe-level PoW |
 
 **Bound PoW preimage:** `challengeID:sessionBind:salt:nonce` → SHA-256 leading zero bits.
@@ -261,6 +265,7 @@ IP Lua keys share hash tag `{ipHash}` (`…:ip:{hash}:freeze|geo|epoch|active|ch
 | `PoWBaseDifficulty` / max / probe | 14 / 22 / 10 @ 8% |
 | `RiskThreshold` | 0.5 (soft) |
 | `HardRejectScore` | 0 (off) |
+| `StretchPoWRiskMin` | 0 (off) |
 | `MinSessionAge` | 2s |
 | `SlidePadding` / `RotatePadding` | 5 |
 | Session cookie TTL | 24h |
