@@ -11,6 +11,15 @@ import "github.com/feerichnii/go-captcha/v2/base/challenge"
 // DefaultMaxPadding is the recommended upper bound for rotate angle padding (degrees).
 const DefaultMaxPadding = 8
 
+// Client slider contract for user-supplied angle (degrees).
+// max is 359 so a full turn is not aliased with 0deg in the UI while still
+// covering every default secret angle in [30, 330] under Validate.
+const (
+	ClientAngleMin  = 0
+	ClientAngleMax  = 359
+	ClientAngleStep = 1
+)
+
 // Validate checks if the rotation angle is within the specified range
 // params:
 //   - angle: Current angle

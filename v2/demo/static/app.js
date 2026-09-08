@@ -195,6 +195,9 @@ function renderChallenge(card, ch) {
     thumb.style.height = `${ratio * 100}%`;
     thumb.style.transform = "translate(-50%, -50%) rotate(0deg)";
     const track = $(".track", card);
+    track.min = 0;
+    track.max = 359;
+    track.step = 1;
     track.value = 0;
     card._tracker = new TrajectoryTracker(track, { relative: false }).start();
     const armRotate = () => {
