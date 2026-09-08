@@ -20,6 +20,10 @@ var (
 	ErrBrowserRequired    = errors.New("antibot: browser attestation required")
 	ErrPiecePressRequired = errors.New("antibot: puzzle piece press required before drag")
 	ErrMissingClientIP    = errors.New("antibot: authoritative client IP required")
+	ErrPrecheckRequired   = errors.New("antibot: checkbox precheck required before issue")
+	ErrPrecheckExpired    = errors.New("antibot: precheck expired or already used")
+	ErrPrecheckFailed     = errors.New("antibot: precheck failed")
+	ErrUnsupportedClient  = errors.New("antibot: client capabilities unsupported")
 )
 
 // Machine-readable error_code values for HTTP/API responses.
@@ -36,6 +40,10 @@ const (
 	CodePiecePressRequired = "piece_press_required"
 	CodeBadTrajectory      = "bad_trajectory"
 	CodeInvalidRequest     = "invalid_request"
+	CodePrecheckRequired   = "precheck_required"
+	CodePrecheckExpired    = "precheck_expired"
+	CodePrecheckFailed     = "precheck_failed"
+	CodeUnsupportedClient  = "unsupported_client"
 	CodeInternal           = "internal"
 )
 
@@ -67,6 +75,14 @@ func ErrorCode(err error) string {
 		return CodePiecePressRequired
 	case errors.Is(err, ErrBadTrajectory):
 		return CodeBadTrajectory
+	case errors.Is(err, ErrPrecheckRequired):
+		return CodePrecheckRequired
+	case errors.Is(err, ErrPrecheckExpired):
+		return CodePrecheckExpired
+	case errors.Is(err, ErrPrecheckFailed):
+		return CodePrecheckFailed
+	case errors.Is(err, ErrUnsupportedClient):
+		return CodeUnsupportedClient
 	case errors.Is(err, ErrInvalidRequest),
 		errors.Is(err, ErrClientKeyLooksLikeIP),
 		errors.Is(err, ErrBadSession),

@@ -60,6 +60,52 @@ html, body {
   margin-bottom: 0.75rem;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.85rem 1rem;
+  background: #121820;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.human-check {
+  width: 22px;
+  height: 22px;
+  accent-color: #22c55e;
+  cursor: pointer;
+}
+.human-check.success {
+  accent-color: #22c55e;
+}
+.checkbox-label {
+  font-weight: 600;
+  font-size: 1rem;
+}
+.checkbox-spin {
+  width: 18px;
+  height: 18px;
+  margin-left: auto;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+.precheck-hint {
+  margin: 0.55rem 0 0;
+  min-height: 1.1em;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+.interactive {
+  margin-top: 0.85rem;
+}
+
 .stage {
   position: relative;
   width: 100%;

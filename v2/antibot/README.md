@@ -1,8 +1,34 @@
 # antibot
 
-AntiBot orchestration around go-captcha (Slide / Rotate): **one-shot geometry**, session+IP binding, escalating freeze, adaptive PoW, JS workloads, trajectory risk, and optional invisible/a11y modes.
+AntiBot orchestration around go-captcha (Slide / Rotate): **checkbox Precheck (Stage 1)** + **one-shot geometry (Stage 2)**, session+IP binding, escalating freeze, adaptive PoW, JS workloads, trajectory risk, and optional invisible/a11y modes.
 
 This document explains **how decisions are made**, **what is checked**, and **which delays/TTLs apply**. For API surface details see also [`client/`](client/) and [`example_http_test.go`](example_http_test.go).
+
+---
+
+## Two-stage model (checkbox + interactive)
+
+```text
+[ ] Я не робот  →  Stage 1 Precheck (JS/PoW/risk)  →  Slide/Rotate  →  auto Verify
+```
+
+| Stage | Purpose | Proves human? |
+|-------|---------|----------------|
+| **1 — Precheck** | Session/IP, freeze, rate, risk, JS, PoW, soft click signals | **No** — not final success |
+| **2 — Interactive** | One-shot Slide/Rotate geometry + trajectory | Still a signal, not a proof |
+
+**Passing Precheck does not by itself prove human presence and does not constitute final CAPTCHA success.**
+
+When `Config.RequirePrecheck` is true (demo default):
+
+1. `PrecheckIssue` → short-lived `PrecheckRecord` (TTL **45s**, not a geometry challenge).
+2. `PrecheckVerify` → consume precheck; set server-side `precheck-passed` (same session + `/32`).
+3. `Issue` → requires consuming `precheck-passed` or returns `ErrPrecheckRequired` / `precheck_required`.
+4. Demo merged UX: `POST /api/precheck/verify` runs PrecheckVerify + Generate + Issue and returns the puzzle.
+
+Precheck failures (`pow_invalid`, `js_failed`, expired) raise soft risk / precheck rate — **never** `badgeo++`, geometry freeze, or epoch bump.
+
+Invisible skip-after-checkbox is **not** enabled in this path (always Stage 2 after Precheck).
 
 ---
 
@@ -266,6 +292,8 @@ IP Lua keys share hash tag `{ipHash}` (`…:ip:{hash}:freeze|geo|epoch|active|ch
 | `RiskThreshold` | 0.5 (soft) |
 | `HardRejectScore` | 0 (off) |
 | `StretchPoWRiskMin` | 0 (off) |
+| `RequirePrecheck` | false (demo sets true) |
+| `PrecheckTTL` | 45s |
 | `MinSessionAge` | 2s |
 | `SlidePadding` / `RotatePadding` | 5 |
 | Session cookie TTL | 24h |

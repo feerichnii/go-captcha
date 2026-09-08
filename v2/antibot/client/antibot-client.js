@@ -520,7 +520,7 @@ export async function solvePoW(powOrSalt, difficulty, opts = {}) {
  */
 
 const DEFAULT_CAPABILITIES = Object.freeze({
-  protocol: 1,
+  protocol: 2,
   pow: Object.freeze(["sha256-v1"]),
 });
 
@@ -533,11 +533,20 @@ const TERMINAL_ERROR_CODES = new Set([
   "low_score",
 ]);
 
+const PRECHECK_TERMINAL_CODES = new Set([
+  "locked",
+  "rate_limited",
+  "precheck_expired",
+  "unsupported_client",
+]);
+
 export class AntiBotClient {
   /**
    * @param {object} cfg
    * @param {string} cfg.issueUrl
    * @param {string} cfg.verifyUrl
+   * @param {string} [cfg.precheckIssueUrl]
+   * @param {string} [cfg.precheckVerifyUrl]
    * @param {typeof fetch} [cfg.fetch]
    * @param {Record<string,string>} [cfg.headers]
    * @param {(pow:{salt:string,difficulty:number})=>void} [cfg.onPoWStart]
@@ -547,11 +556,15 @@ export class AntiBotClient {
   constructor(cfg) {
     this.issueUrl = cfg.issueUrl;
     this.verifyUrl = cfg.verifyUrl;
+    this.precheckIssueUrl = cfg.precheckIssueUrl ?? "";
+    this.precheckVerifyUrl = cfg.precheckVerifyUrl ?? "";
     this.fetch = cfg.fetch ?? globalThis.fetch.bind(globalThis);
     this.headers = cfg.headers ?? {};
     this.onPoWStart = cfg.onPoWStart;
     this.onPoWDone = cfg.onPoWDone;
     this.capabilities = cfg.capabilities ?? DEFAULT_CAPABILITIES;
+    this._precheckInFlight = false;
+    this._precheckTerminal = null;
   }
 
   async _post(url, body) {
@@ -571,6 +584,121 @@ export class AntiBotClient {
     return { ok: res.ok, status: res.status, data };
   }
 
+  _throwHTTP(status, data, fallback) {
+    const code = data?.error_code || data?.error;
+    const err = new Error(
+      code
+        ? `antibot: ${code}${data.retry_after_ms ? ` (retry_after_ms=${data.retry_after_ms})` : ""}`
+        : `antibot: ${fallback} (${status})`
+    );
+    err.status = status;
+    err.data = data;
+    err.error_code = code;
+    err.retry_after_ms = data?.retry_after_ms;
+    throw err;
+  }
+
+  /**
+   * Stage-1 checkbox precheck: mint → solve JS/PoW → verify.
+   * When precheckVerify returns status "challenge", that interactive challenge is returned.
+   * @param {object} [opts]
+   * @param {string} [opts.kind] slide|rotate for merged verify→issue
+   * @param {object} [opts.interaction] PrecheckInteraction fields
+   * @param {object} [opts.browser]
+   */
+  async runPrecheck(opts = {}) {
+    if (!this.precheckIssueUrl || !this.precheckVerifyUrl) {
+      const err = new Error("antibot: precheck URLs not configured");
+      err.error_code = "invalid_request";
+      throw err;
+    }
+    if (this._precheckTerminal) {
+      const err = new Error(`antibot: precheck already ${this._precheckTerminal}`);
+      err.error_code = "already_terminal";
+      throw err;
+    }
+    if (this._precheckInFlight) {
+      const err = new Error("antibot: precheck already in flight");
+      err.error_code = "in_flight";
+      throw err;
+    }
+    this._precheckInFlight = true;
+    try {
+      const browser = opts.browser || collectBrowserSignals();
+      const caps = opts.capabilities ?? this.capabilities;
+      const { ok, status, data } = await this._post(this.precheckIssueUrl, {
+        capabilities: caps,
+        browser,
+      });
+      if (!ok) {
+        const code = data?.error_code || data?.error || "";
+        if (PRECHECK_TERMINAL_CODES.has(code)) this._precheckTerminal = code;
+        this._throwHTTP(status, data, "precheck issue failed");
+      }
+      if (data.pow?.kind === "stretch") {
+        const err = new Error("antibot: stretch PoW is not supported by this client");
+        err.error_code = "unsupported_pow";
+        throw err;
+      }
+      let pow_nonce;
+      let js_response;
+      if (data.js_challenge) {
+        js_response = await solveJSChallenge(data.js_challenge, browser);
+      }
+      if (data.pow && data.pow.difficulty > 0) {
+        this.onPoWStart?.(data.pow);
+        try {
+          pow_nonce = await solvePoW(data.pow);
+        } finally {
+          this.onPoWDone?.();
+        }
+      }
+      const ver = await this._post(this.precheckVerifyUrl, {
+        kind: opts.kind || "slide",
+        precheck_id: data.precheck_id,
+        js_response,
+        pow_nonce,
+        browser: { ...browser, js_challenge_response: js_response },
+        interaction: opts.interaction || {},
+        capabilities: caps,
+      });
+      if (!ver.ok) {
+        const code = ver.data?.error_code || ver.data?.error || "";
+        if (PRECHECK_TERMINAL_CODES.has(code)) this._precheckTerminal = code;
+        this._throwHTTP(ver.status, ver.data, "precheck verify failed");
+      }
+      this._precheckTerminal = null; // allow refresh / new flow after success path
+      if (ver.data?.status === "challenge" && ver.data?.id) {
+        const ch = {
+          ...ver.data,
+          _powPromise: null,
+          _browser: browser,
+          _verifyInFlight: false,
+          _terminal: null,
+        };
+        if (ver.data.js_challenge) {
+          ch._jsPromise = solveJSChallenge(ver.data.js_challenge, browser);
+          ch._jsPromise.catch(() => {});
+        }
+        if (ver.data.pow && ver.data.pow.difficulty > 0) {
+          this.onPoWStart?.(ver.data.pow);
+          ch._powPromise = solvePoW(ver.data.pow).finally(() => this.onPoWDone?.());
+          ch._powPromise.catch(() => {});
+        }
+        return ch;
+      }
+      return ver.data;
+    } finally {
+      this._precheckInFlight = false;
+    }
+  }
+
+  /** Reset checkbox precheck single-flight / terminal (e.g. after cooldown). */
+  resetPrecheck() {
+    this._precheckInFlight = false;
+    this._precheckTerminal = null;
+  }
+
   /**
    * Request a challenge. If the server attaches PoW, start solving it in the
    * background immediately so it overlaps with the user's interaction.
@@ -583,17 +711,7 @@ export class AntiBotClient {
     };
     const { ok, status, data } = await this._post(this.issueUrl, body);
     if (!ok) {
-      const code = data?.error_code || data?.error;
-      const err = new Error(
-        code
-          ? `antibot: ${code}${data.retry_after_ms ? ` (retry_after_ms=${data.retry_after_ms})` : ""}`
-          : `antibot: issue failed (${status})`
-      );
-      err.status = status;
-      err.data = data;
-      err.error_code = code;
-      err.retry_after_ms = data?.retry_after_ms;
-      throw err;
+      this._throwHTTP(status, data, "issue failed");
     }
     // Refuse to solve stretch in the browser until stretch-v2 is redesigned.
     if (data.pow?.kind === "stretch") {

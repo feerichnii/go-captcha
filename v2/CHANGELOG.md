@@ -4,6 +4,13 @@ All notable changes to go-captcha v2 (AntiBot + captcha packages) are documented
 
 ## Unreleased
 
+### AntiBot checkbox Precheck (P1 UX)
+- Stage 1 `PrecheckIssue` / `PrecheckVerify` (separate record, rates, TTL); `RequirePrecheck` gates Issue
+- Merged demo path: checkbox → precheck → Generate+Issue → auto Verify on pointerup
+- Precheck failures never trigger geometry freeze / badgeo / epoch
+- Client `runPrecheck` + protocol **2**; telemetry `OnPrecheck`
+- Error codes: `precheck_required`, `precheck_expired`, `unsupported_client`
+
 ### AntiBot P0.2
 - `StretchPoWRiskMin=0` is truly off (default); stretch issuance requires opt-in + client `stretch-v2` capability
 - Client `capabilities.pow` negotiation (`sha256-v1`); JS client single-flight verify + terminal challenge state

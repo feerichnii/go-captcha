@@ -29,13 +29,31 @@ export function createAntiBotHooks({ useState, useCallback, useRef }) {
       [client]
     );
 
+    const runPrecheck = useCallback(
+      async (opts = {}) => {
+        setLoading(true);
+        setError(null);
+        try {
+          const ch = await client.runPrecheck(opts);
+          if (ch?.id) chRef.current = ch;
+          return ch;
+        } catch (e) {
+          setError(e);
+          throw e;
+        } finally {
+          setLoading(false);
+        }
+      },
+      [client]
+    );
+
     const verify = useCallback(
       async (answer, trajectory) => {
         setLoading(true);
         setError(null);
         try {
           const ch = chRef.current;
-          if (!ch) throw new Error("antibot: call issue() first");
+          if (!ch) throw new Error("antibot: call issue() or runPrecheck() first");
           return await client.verify(ch, answer, trajectory);
         } catch (e) {
           setError(e);
@@ -47,6 +65,6 @@ export function createAntiBotHooks({ useState, useCallback, useRef }) {
       [client]
     );
 
-    return { issue, verify, loading, error, challengeRef: chRef };
+    return { issue, runPrecheck, verify, loading, error, challengeRef: chRef };
   };
 }

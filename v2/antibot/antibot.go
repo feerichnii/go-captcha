@@ -70,7 +70,7 @@ type ClientCapabilities struct {
 const (
 	PoWAlgoSHA256V1  = "sha256-v1"
 	PoWAlgoStretchV2 = "stretch-v2" // experimental; not issued unless opted in + advertised
-	ProtocolVersion  = 1
+	ProtocolVersion  = 2
 )
 
 // IssueRequest creates a new challenge from a generated captcha answer.
@@ -211,6 +211,8 @@ func clientSupportsPoW(caps ClientCapabilities, algo string) bool {
 }
 
 // Issue stores a challenge and returns a public id (+ PoW when the client is risky).
+// When Config.RequirePrecheck is set, a successful PrecheckVerify must have run
+// for the same session + IP /32 (consumed here; one Issue per passed precheck).
 func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, error) {
 	if err := validateClientKey(req.ClientKey); err != nil {
 		return nil, err
@@ -222,6 +224,17 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 	if err := l.CheckFrozen(ctx, ipHash); err != nil {
 		return nil, err
 	}
+
+	hash := hashClient(req.ClientKey)
+	var precheckID string
+	if l.cfg.RequirePrecheck {
+		passed, err := l.consumePrecheckPassed(ctx, hash, ipHash)
+		if err != nil {
+			return nil, err
+		}
+		precheckID = passed.PrecheckID
+	}
+
 	if err := l.CheckIssueRate(ctx, req.ClientKey, ipHash); err != nil {
 		return nil, err
 	}
@@ -229,7 +242,6 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		return nil, ErrBrowserRequired
 	}
 
-	hash := hashClient(req.ClientKey)
 	l.noteIssued(ctx, hash)
 	l.noteGlobalIssue(ctx)
 	l.noteSessionRotation(ctx, ipHash, hash)
@@ -295,6 +307,7 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		JSLoopCount: jsCh.LoopCount,
 		TileW:       tileW,
 		TileH:       tileH,
+		PrecheckID:  precheckID,
 	}
 
 	diff := l.cfg.choosePoW(level)
@@ -375,6 +388,7 @@ func (l *Layer) Issue(ctx context.Context, req IssueRequest) (*IssueResponse, er
 		ClientHash:    hash,
 		RiskLevel:     level,
 		PoWDifficulty: rec.PoWDiff,
+		PrecheckID:    precheckID,
 	})
 
 	var hmOut *HardModeState

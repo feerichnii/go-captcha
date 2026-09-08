@@ -52,6 +52,8 @@ type ChallengeRecord struct {
 	// TileW/TileH are the public tile/knob size (slide/rotate) for piece_down bounds.
 	TileW int `json:"tile_w,omitempty"`
 	TileH int `json:"tile_h,omitempty"`
+	// PrecheckID links this interactive challenge to a successful Stage-1 precheck.
+	PrecheckID string `json:"precheck_id,omitempty"`
 }
 
 func encodeRecord(r *ChallengeRecord) ([]byte, error) {

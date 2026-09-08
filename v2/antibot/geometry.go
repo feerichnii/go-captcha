@@ -45,6 +45,14 @@ func (l *Layer) warmupKey(sessionHash string) string {
 	return l.cfg.KeyPrefix + "warmup:" + sessionHash
 }
 
+func (l *Layer) precheckKey(ipHash, id string) string {
+	return l.ipRoot(ipHash) + "precheck:" + id
+}
+
+func (l *Layer) precheckPassedKey(ipHash, sessionHash string) string {
+	return l.ipRoot(ipHash) + "precheck-passed:" + sessionHash
+}
+
 func (l *Layer) geoLockTTL() time.Duration {
 	if l.cfg.GeoLockTTL > 0 {
 		return l.cfg.GeoLockTTL

@@ -7,6 +7,7 @@ import "errors"
 type Telemetry interface {
 	OnIssue(IssueEvent)
 	OnVerify(VerifyEvent)
+	OnPrecheck(PrecheckEvent)
 }
 
 // IssueEvent is emitted after a challenge is stored.
@@ -16,6 +17,7 @@ type IssueEvent struct {
 	ClientHash    string
 	RiskLevel     int
 	PoWDifficulty int
+	PrecheckID    string
 }
 
 // VerifyEvent is emitted once per Verify call, whatever the outcome.
@@ -40,16 +42,30 @@ type VerifyEvent struct {
 	GeometryDurationMs   int64
 }
 
+// PrecheckEvent is emitted for Stage-1 checkbox funnel metrics.
+type PrecheckEvent struct {
+	PrecheckID    string
+	ClientHash    string
+	Outcome       string // issued | success | failed
+	ErrorCode     string
+	RiskLevel     int
+	PoWDifficulty int
+	PoWKind       string
+	ElapsedMs     int64
+}
+
 // NoopTelemetry drops all events.
 type NoopTelemetry struct{}
 
-func (NoopTelemetry) OnIssue(IssueEvent)   {}
-func (NoopTelemetry) OnVerify(VerifyEvent) {}
+func (NoopTelemetry) OnIssue(IssueEvent)       {}
+func (NoopTelemetry) OnVerify(VerifyEvent)     {}
+func (NoopTelemetry) OnPrecheck(PrecheckEvent) {}
 
 // TelemetryFunc adapts plain functions to Telemetry.
 type TelemetryFunc struct {
-	Issue  func(IssueEvent)
-	Verify func(VerifyEvent)
+	Issue    func(IssueEvent)
+	Verify   func(VerifyEvent)
+	Precheck func(PrecheckEvent)
 }
 
 func (t TelemetryFunc) OnIssue(e IssueEvent) {
@@ -61,6 +77,12 @@ func (t TelemetryFunc) OnIssue(e IssueEvent) {
 func (t TelemetryFunc) OnVerify(e VerifyEvent) {
 	if t.Verify != nil {
 		t.Verify(e)
+	}
+}
+
+func (t TelemetryFunc) OnPrecheck(e PrecheckEvent) {
+	if t.Precheck != nil {
+		t.Precheck(e)
 	}
 }
 
@@ -95,6 +117,14 @@ func outcomeName(err error) string {
 		return "piece_press_required"
 	case errors.Is(err, ErrMissingClientIP):
 		return "missing_client_ip"
+	case errors.Is(err, ErrPrecheckRequired):
+		return "precheck_required"
+	case errors.Is(err, ErrPrecheckExpired):
+		return "precheck_expired"
+	case errors.Is(err, ErrPrecheckFailed):
+		return "precheck_failed"
+	case errors.Is(err, ErrUnsupportedClient):
+		return "unsupported_client"
 	default:
 		return "error"
 	}

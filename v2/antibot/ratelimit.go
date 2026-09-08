@@ -91,6 +91,38 @@ func (l *Layer) CheckVerifyRate(ctx context.Context, clientKey, ipHash string) e
 	return l.checkRateHash(ctx, "rlvg", "global", l.cfg.GlobalVerifyRateMax)
 }
 
+// CheckPrecheckIssueRate limits checkbox precheck minting (session + /32).
+func (l *Layer) CheckPrecheckIssueRate(ctx context.Context, clientKey, ipHash string) error {
+	if clientKey == "" {
+		return ErrInvalidRequest
+	}
+	if err := l.checkRateHash(ctx, "rlpi", hashClient(clientKey), l.cfg.PrecheckIssueRateMax); err != nil {
+		return err
+	}
+	if ipHash != "" {
+		if err := l.checkRateHash(ctx, "rlpiip", ipHash, l.cfg.PrecheckIssueRateMax); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CheckPrecheckVerifyRate limits checkbox precheck verification (session + /32).
+func (l *Layer) CheckPrecheckVerifyRate(ctx context.Context, clientKey, ipHash string) error {
+	if clientKey == "" {
+		return ErrInvalidRequest
+	}
+	if err := l.checkRateHash(ctx, "rlpv", hashClient(clientKey), l.cfg.PrecheckVerifyRateMax); err != nil {
+		return err
+	}
+	if ipHash != "" {
+		if err := l.checkRateHash(ctx, "rlpvip", ipHash, l.cfg.PrecheckVerifyRateMax); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // softPrefixRisk bumps soft risk when /24 issue volume is high.
 func (l *Layer) softPrefixRisk(ctx context.Context, addr netip.Addr) int {
 	pfx := IPv4Slash24(addr)

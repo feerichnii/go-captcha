@@ -166,6 +166,17 @@ type Config struct {
 	InvisibleMaxRisk int
 	// AllowA11YKeyboard accepts keyboard-built trajectories (soft; still scored).
 	AllowA11YKeyboard bool
+
+	// RequirePrecheck gates Issue behind a successful checkbox Precheck
+	// (default false for backward-compatible unit tests; demo enables it).
+	RequirePrecheck bool
+	// PrecheckTTL lifetime of PrecheckRecord and precheck-passed state (default 45s).
+	PrecheckTTL time.Duration
+	// PrecheckMinSolveTime earliest PrecheckVerify after PrecheckIssue (default 50ms).
+	PrecheckMinSolveTime time.Duration
+	// PrecheckIssueRateMax / PrecheckVerifyRateMax per RateWindow (default 40 / 60).
+	PrecheckIssueRateMax  int
+	PrecheckVerifyRateMax int
 }
 
 // RequireBrowser reports whether hard JS/UA gates are active.
@@ -288,6 +299,10 @@ func (c *Config) withDefaults() Config {
 	} else if c.MinPiecePressDwellMs < 0 {
 		out.MinPiecePressDwellMs = 0
 	}
+	setDur(&out.PrecheckTTL, 45*time.Second)
+	setDur(&out.PrecheckMinSolveTime, 50*time.Millisecond)
+	setInt(&out.PrecheckIssueRateMax, 40)
+	setInt(&out.PrecheckVerifyRateMax, 60)
 	return out
 }
 
