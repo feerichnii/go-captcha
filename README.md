@@ -455,9 +455,47 @@ func loadPng(p string) (image.Image, error) {
 
 The [`v2/antibot`](v2/antibot) package wraps CAPTCHA generation and verification with a full anti-automation pipeline: answers stay on the server, **one visual challenge = one geometry attempt**, tech failures do not consume the challenge, and abuse identity is primarily exact IPv4 `/32` (freeze + epoch) plus session binding.
 
+### How it works
+
+```mermaid
+flowchart LR
+  subgraph client [Browser]
+    A[Show Slide/Rotate]
+    B[User solves]
+    C[Проверить решение]
+    D[Hidden JS + PoW]
+    A --> B --> C --> D
+  end
+  subgraph server [Server]
+    I[Issue]
+    V[Verify]
+    G[ClaimGeometry]
+    Geo[Check answer]
+    I -->|id images pow js| A
+    D -->|POST /verify| V
+    V --> G --> Geo
+  end
+```
+
+```text
+Recommended UX
+──────────────
+1. POST /issue     → mint challenge (encrypted answer on server)
+2. Show puzzle     → user drags / rotates (trajectory stays local)
+3. «Проверить»     → finish Issue-attached JS + PoW (hidden)
+4. POST /verify    → tech gates → atomic ClaimGeometry → geometry
+
+Server Verify order (do not reorder)
+────────────────────────────────────
+rate / freeze / bind → MinSolveTime → PoW → JS → piece_down
+  → ClaimGeometry (one-shot)
+  → decrypt + geometry check
+  → FinalizeSuccess | FinalizeFailure (freeze / epoch)
+```
+
 ```
 AntiBot layer
-├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, one-shot geometry (no MaxAttempts)
+├── Challenge Manager   crypto ID, Redis/Memory, TTL 90s, one-shot geometry
 ├── IP epoch + active   single live challenge per /32; bad answer invalidates prefetch
 ├── Answer storage      AES-256-GCM bound to challenge id — never sent to client
 ├── Binding + freeze    session + HMAC /32; escalating cooldown 2s→5s→15s→60s→300s
@@ -466,6 +504,8 @@ AntiBot layer
 ├── Rate limits         hard: session+/32/global; soft: /24+ASN → risk only
 └── Browser client      client/antibot-client.js + optional React/Vue helpers
 ```
+
+Full diagrams (components, sequence, Verify pipeline): **[`v2/antibot/README.md`](v2/antibot/README.md)**.
 
 ### Quick start
 ```go

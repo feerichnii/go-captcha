@@ -1,8 +1,99 @@
 # antibot
 
-AntiBot orchestration around go-captcha (Slide / Rotate): **checkbox Precheck (Stage 1)** + **one-shot geometry (Stage 2)**, session+IP binding, escalating freeze, adaptive PoW, JS workloads, trajectory risk, and optional invisible/a11y modes.
+AntiBot orchestration around go-captcha (Slide / Rotate): **issue-first puzzle**, hidden JS/PoW on verify, **one-shot geometry**, session+IP binding, escalating freeze, adaptive PoW, trajectory risk, optional invisible/a11y.
 
-This document explains **how decisions are made**, **what is checked**, and **which delays/TTLs apply**. For API surface details see also [`client/`](client/) and [`example_http_test.go`](example_http_test.go).
+This document explains **how the stack is wired**, **how decisions are made**, and **which delays/TTLs apply**. Client helpers: [`client/`](client/). HTTP sketch: [`example_http_test.go`](example_http_test.go).
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph browser [Browser]
+    UI[Slide / Rotate UI]
+    Local[Local answer + trajectory]
+    TechSolve[Hidden JS + PoW solve]
+    ClientJS[antibot-client.js]
+    UI --> Local
+    Local --> ClientJS
+    TechSolve --> ClientJS
+  end
+
+  subgraph http [Your HTTP API]
+    IssueEP[POST /issue]
+    VerifyEP[POST /verify]
+  end
+
+  subgraph layer [antibot.Layer]
+    Issue[Issue]
+    Verify[Verify]
+    Risk[Risk + Hard Mode]
+    Store[(Memory / Redis)]
+  end
+
+  subgraph captcha [go-captcha generators]
+    Slide[slide.Generate]
+    Rotate[rotate.Generate]
+  end
+
+  ClientJS -->|issue| IssueEP --> Issue
+  Issue --> Risk
+  Issue --> Store
+  Slide --> IssueEP
+  Rotate --> IssueEP
+  IssueEP -->|id public images pow? js?| ClientJS
+  ClientJS -->|verify| VerifyEP --> Verify
+  Verify --> Store
+  Verify --> Risk
+```
+
+### Sequence (recommended UX)
+
+```mermaid
+sequenceDiagram
+  participant User
+  participant Browser
+  participant API
+  participant Layer as antibot.Layer
+  participant Gen as slide/rotate
+
+  User->>Browser: open page
+  Browser->>API: POST /issue
+  API->>Layer: PreflightIssue
+  API->>Gen: Generate
+  API->>Layer: Issue encrypted answer
+  Layer-->>Browser: id, public, images, pow?, js_challenge
+  Note over Browser: PoW/JS may start in background
+  User->>Browser: drag / rotate
+  Note over Browser: answer + trajectory stay local
+  User->>Browser: Проверить решение
+  Browser->>Browser: finish JS + PoW
+  Browser->>API: POST /verify
+  API->>Layer: Verify
+  Note over Layer: rate freeze bind<br/>MinSolveTime PoW JS piece_down<br/>ClaimGeometry then geometry
+  Layer-->>Browser: ok or error_code + retry_after_ms
+```
+
+### Verify pipeline (server)
+
+```mermaid
+flowchart TD
+  start[Verify request] --> hygiene[Request hygiene]
+  hygiene --> freeze{freeze /32?}
+  freeze -->|yes| locked[ErrLocked]
+  freeze -->|no| load[Load challenge bind session IP epoch]
+  load --> tech[Tech gates]
+  tech --> tooFast[MinSolveTime]
+  tech --> pow[PoW]
+  tech --> js[JS challenge]
+  tech --> piece[piece_down]
+  tech -->|any fail| kept[Challenge KEPT]
+  tech -->|ok| claim[ClaimGeometryAtomic one-shot]
+  claim --> geo{geometry OK?}
+  geo -->|wrong| fail[FinalizeFailure: freeze epoch badgeo]
+  geo -->|correct| ok[FinalizeSuccess + risk update]
+```
 
 ---
 
@@ -44,29 +135,45 @@ AntiBot does **not** “prove a human”. It stacks **hard gates** (must pass or
 
 ---
 
-## End-to-end flow
+## Package map
+
+```text
+v2/antibot/
+├── Layer            Issue / Verify / Preflight / optional Precheck
+├── Store            Memory or Redis (challenge, freeze, risk, rates)
+├── GeometryStore    atomic Issue / Claim / FinalizeFailure
+├── checker          slide / rotate geometry tolerance
+├── risk + hardmode  soft escalation + global friction
+├── pow / browser    bound PoW + rotating JS workloads
+├── trajectory       piece_down + scoring components
+└── client/          antibot-client.js, React/Vue thin wrappers
+```
+
+---
+
+## End-to-end Issue→client loop (compact)
 
 ```mermaid
 flowchart TD
   issue[Issue] --> risk[Effective risk at Issue]
   risk --> pow[Maybe attach PoW + JS challenge]
   pow --> store[Atomic Issue: freeze check, stamp epoch, replace active]
-  store --> client[Client: images / solve PoW / drag]
-
-  client --> verify[Verify]
+  store --> client[Client: images / optional background PoW / drag]
+  client --> verifyClick[User: Проверить решение]
+  verifyClick --> finishTech[Finish JS + PoW]
+  finishTech --> verify[Verify]
   verify --> rl[Hard rate limits + IP]
   rl --> frz{freeze /32?}
   frz -->|yes| locked[ErrLocked + retry_after_ms]
   frz -->|no| bind[GET challenge: session + IP + epoch]
-  bind --> tech[Tech gates: MinSolveTime, PoW, JS, piece_down, traj structure]
+  bind --> tech[Tech gates: MinSolveTime, PoW, JS, piece_down]
   tech -->|fail| keep[Challenge KEPT]
   tech -->|ok| claim[ClaimGeometryAtomic]
   claim --> inv{KindInvisible?}
-  inv -->|yes| okInv[FinalizeSuccess — no geometry]
+  inv -->|yes| okInv[FinalizeSuccess]
   inv -->|no| dec[Decrypt answer]
-  dec -->|internal| abort[FinalizeAbort — release geo only]
   dec -->|ok| geo{geometry within padding?}
-  geo -->|wrong| fail[FinalizeFailureAtomic: freeze + epoch + badgeo]
+  geo -->|wrong| fail[FinalizeFailureAtomic]
   geo -->|correct| ok[FinalizeSuccess + maybe clear warmup]
 ```
 
