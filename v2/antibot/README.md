@@ -8,6 +8,8 @@ This document explains **how the stack is wired**, **how decisions are made**, a
 
 ## Architecture
 
+### System layout
+
 ```mermaid
 flowchart TB
   subgraph browser [Browser]
@@ -26,6 +28,7 @@ flowchart TB
   end
 
   subgraph layer [antibot.Layer]
+    Preflight[PreflightIssue]
     Issue[Issue]
     Verify[Verify]
     Risk[Risk + Hard Mode]
@@ -37,16 +40,66 @@ flowchart TB
     Rotate[rotate.Generate]
   end
 
-  ClientJS -->|issue| IssueEP --> Issue
+  ClientJS -->|1 issue| IssueEP
+  IssueEP --> Preflight
+  Preflight -->|ok| Slide
+  Preflight -->|ok| Rotate
+  Slide --> Issue
+  Rotate --> Issue
   Issue --> Risk
   Issue --> Store
-  Slide --> IssueEP
-  Rotate --> IssueEP
   IssueEP -->|id public images pow? js?| ClientJS
-  ClientJS -->|verify| VerifyEP --> Verify
+  ClientJS -->|2 verify| VerifyEP --> Verify
   Verify --> Store
   Verify --> Risk
 ```
+
+### What is checked at each stage
+
+```mermaid
+flowchart TB
+  subgraph s0 [0_HTTP_handler]
+    h0["Session cookie to ClientKey\nSignalsFromRequestTrusted: IP UA"]
+  end
+
+  subgraph s1 [1_PreflightIssue_cheap]
+    p1["HARD: ClientKey valid\nHARD: authoritative IP\nHARD: freeze /32\nHARD peek: Issue rate\nHARD: non-browser UA"]
+  end
+
+  subgraph s2 [2_Generate_images]
+    g1["slide/rotate.Generate\nno AntiBot checks\nanswer stays server-side"]
+  end
+
+  subgraph s3 [3_Issue_mint]
+    i1["HARD: freeze + Issue rate Incr\nHARD: UA again\nSOFT: risk warmup sessrot hints\nattach PoW + JS\nATOMIC: epoch active encrypt answer"]
+  end
+
+  subgraph s4 [4_Browser]
+    b1["Show puzzle\nrecord trajectory + piece_down\noptional early PoW/JS\non Verify click: finish PoW/JS\nPOST answer traj nonces"]
+  end
+
+  subgraph s5 [5_Verify_tech_KEPT_on_fail]
+    v1["HARD: rate freeze IP\nHARD: bind session IP epoch TTL\nHARD: MinSolveTime\nHARD: PoW\nHARD: JS\nHARD: piece_down dwell\nSOFT: traj + browser to risk"]
+  end
+
+  subgraph s6 [6_Claim_geometry_CONSUMES]
+    c1["ATOMIC ClaimGeometry\nHARD: CheckSlide/Rotate\nwrong: freeze epoch badgeo\ncorrect: FinalizeSuccess\nSOFT: EvaluateRisk warmup"]
+  end
+
+  s0 --> s1 --> s2 --> s3 --> s4 --> s5 --> s6
+```
+
+| Stage | Where | Hard checks | Soft / side effects | On fail |
+|-------|--------|-------------|---------------------|---------|
+| **0. HTTP** | your handler | session → `ClientKey`; trusted IP in `Signals` | — | your status codes |
+| **1. Preflight** | `PreflightIssue` | key, IP, freeze, rate *peek*, UA | — | **no images** generated |
+| **2. Generate** | `slide` / `rotate` | — | CPU for images | 500 |
+| **3. Issue** | `Layer.Issue` | freeze, rate *Incr*, UA; optional `RequirePrecheck` | risk → PoW/JS; sessrot; warmup; Hard Mode | no challenge stored |
+| **4. Browser** | client | finish PoW/JS before POST | trajectory recording | — |
+| **5. Verify tech** | `Layer.Verify` | rate, freeze, bind, TTL, `MinSolveTime`, PoW, JS, `piece_down` | traj score, browser consistency | **challenge kept** |
+| **6. Geometry** | after `ClaimGeometry` | answer vs secret + padding | risk ±, warmup, replay note | **consumed**; wrong → freeze/epoch |
+
+**HARD** = request fails (`error_code`). **SOFT** = raises risk / next PoW (fails alone only if `HardRejectScore` is set).
 
 ### Sequence (recommended UX)
 
@@ -61,8 +114,10 @@ sequenceDiagram
   User->>Browser: open page
   Browser->>API: POST /issue
   API->>Layer: PreflightIssue
+  Note over Layer: key IP freeze ratePeek UA
   API->>Gen: Generate
   API->>Layer: Issue encrypted answer
+  Note over Layer: rate Incr risk PoW JS epoch active
   Layer-->>Browser: id, public, images, pow?, js_challenge
   Note over Browser: PoW/JS may start in background
   User->>Browser: drag / rotate
@@ -71,11 +126,11 @@ sequenceDiagram
   Browser->>Browser: finish JS + PoW
   Browser->>API: POST /verify
   API->>Layer: Verify
-  Note over Layer: rate freeze bind<br/>MinSolveTime PoW JS piece_down<br/>ClaimGeometry then geometry
+  Note over Layer: tech gates then ClaimGeometry then geometry
   Layer-->>Browser: ok or error_code + retry_after_ms
 ```
 
-### Verify pipeline (server)
+### Verify pipeline detail
 
 ```mermaid
 flowchart TD
@@ -83,7 +138,7 @@ flowchart TD
   hygiene --> freeze{freeze /32?}
   freeze -->|yes| locked[ErrLocked]
   freeze -->|no| load[Load challenge bind session IP epoch]
-  load --> tech[Tech gates]
+  load --> tech[Tech gates — challenge KEPT if fail]
   tech --> tooFast[MinSolveTime]
   tech --> pow[PoW]
   tech --> js[JS challenge]
