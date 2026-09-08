@@ -114,13 +114,41 @@ function setVerifyUI(card, { busy, done, label } = {}) {
   }
 }
 
+function pickKind() {
+  return Math.random() < 0.5 ? "rotate" : "slide";
+}
+
+function applyKindUI(card, kind) {
+  card.dataset.kind = kind;
+  const badge = $(".badge", card);
+  const hint = $(".hint", card);
+  const thumb = $(".thumb", card);
+  const tile = $(".tile", card);
+  if (badge) badge.textContent = kind.toUpperCase();
+  if (hint) {
+    hint.textContent =
+      kind === "rotate"
+        ? "Совмести круги ползунком, затем проверь решение"
+        : "Двигай плитку до прорези, затем проверь решение";
+  }
+  if (thumb) thumb.hidden = kind !== "rotate";
+  if (tile) tile.hidden = kind !== "slide";
+  // Drop prior track listeners when switching kinds / re-issuing.
+  const oldTrack = $(".track", card);
+  if (oldTrack) {
+    const track = oldTrack.cloneNode(true);
+    oldTrack.replaceWith(track);
+  }
+}
+
 async function issueCard(card) {
-  const kind = card.dataset.kind;
   if (card._lockedUntil && Date.now() < card._lockedUntil) {
     const left = Math.max(0, card._lockedUntil - Date.now());
     setStatus(card, `заблокировано, подождите ${Math.ceil(left / 1000)}с`, false);
     return;
   }
+  const kind = pickKind();
+  applyKindUI(card, kind);
   setStatus(card, "загрузка…");
   setVerifyUI(card, { busy: false, done: false });
   $(".refresh", card).disabled = true;

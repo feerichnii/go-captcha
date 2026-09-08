@@ -9,32 +9,16 @@
 <body>
   <header class="hero">
     <h1>GoCaptcha · AntiBot</h1>
-    <p>Slide / Rotate сразу. JS и PoW выполняются скрыто при нажатии «Проверить решение».</p>
+    <p>После каждой попытки случайно Slide или Rotate. JS и PoW — скрыто при «Проверить решение».</p>
   </header>
 
   <main class="grid">
-    <section class="card" data-kind="rotate">
-      <div class="badge">ROTATE</div>
-      <div class="stage" id="rotate-stage">
-        <img class="master" alt="" />
-        <img class="thumb" alt="" />
-      </div>
-      <input class="track" type="range" min="0" max="360" value="0" />
-      <p class="hint">Совмести круги ползунком, затем проверь решение</p>
-      <button type="button" class="verify-row">
-        <span class="verify-box" aria-hidden="true"></span>
-        <span class="verify-label">Проверить решение</span>
-        <span class="verify-spin" hidden aria-hidden="true"></span>
-      </button>
-      <button type="button" class="btn refresh">Обновить</button>
-      <p class="status"></p>
-    </section>
-
     <section class="card" data-kind="slide">
       <div class="badge">SLIDE</div>
-      <div class="stage" id="slide-stage">
+      <div class="stage" id="captcha-stage">
         <img class="master" alt="" />
-        <img class="tile" alt="" draggable="false" />
+        <img class="thumb" alt="" hidden />
+        <img class="tile" alt="" draggable="false" hidden />
       </div>
       <input class="track" type="range" min="0" max="100" value="0" />
       <p class="hint">Двигай плитку до прорези, затем проверь решение</p>
