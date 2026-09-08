@@ -161,7 +161,6 @@ func main() {
 			Browser:    in.Browser,
 		})
 		if err != nil {
-			log.Printf("verify fail id=%s err=%v", in.ID, err)
 			writeErr(w, err)
 			return
 		}
