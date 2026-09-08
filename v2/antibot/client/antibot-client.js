@@ -464,6 +464,8 @@ export async function solvePoW(powOrSalt, difficulty, opts = {}) {
   }
   const diff = pow.difficulty ?? 0;
   if (diff <= 0) return "0";
+  // Stretch PoW needs memory-hard digest; the SHA-256 worker pool cannot solve it.
+  if (pow.kind === "stretch") return solvePoWInline(pow, diff, opts);
   const canWorker =
     typeof Worker !== "undefined" && typeof Blob !== "undefined" && typeof URL !== "undefined" && URL.createObjectURL;
   if (!canWorker) return solvePoWInline(pow, diff, opts);

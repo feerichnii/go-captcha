@@ -32,7 +32,9 @@ func main() {
 		TTL:           2 * time.Minute,
 		PoWProbeProb:  -1, // quieter demo
 		PoWJitterBits: -1,
-		MinSolveTime:  200 * time.Millisecond,
+		// Stretch PoW is memory-hard and too slow for interactive demo UX.
+		StretchPoWRiskMin: -1,
+		MinSolveTime:      200 * time.Millisecond,
 		// Demo still sends piece_down for slide; rotate uses the angle track.
 		AllowMissingPiecePress: false,
 		// TrustedProxies empty → RemoteAddr only (spoofed XFF ignored).
@@ -182,6 +184,7 @@ func main() {
 			Browser:    in.Browser,
 		})
 		if err != nil {
+			log.Printf("verify fail id=%s err=%v", in.ID, err)
 			writeErr(w, err)
 			return
 		}
