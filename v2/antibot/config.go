@@ -168,7 +168,7 @@ type Config struct {
 	AllowA11YKeyboard bool
 
 	// RequirePrecheck gates Issue behind a successful checkbox Precheck
-	// (default false for backward-compatible unit tests; demo enables it).
+	// (default false). Demo uses issue-first UX and leaves this off.
 	RequirePrecheck bool
 	// PrecheckTTL lifetime of PrecheckRecord and precheck-passed state (default 45s).
 	PrecheckTTL time.Duration

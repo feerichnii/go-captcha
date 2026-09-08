@@ -36,9 +36,6 @@ func main() {
 		MinSolveTime:      200 * time.Millisecond,
 		// Demo still sends piece_down for slide; rotate uses the angle track.
 		AllowMissingPiecePress: false,
-		RequirePrecheck:        true,
-		PrecheckTTL:            45 * time.Second,
-		PoWProbeDifficulty:     8, // light Stage-1 PoW for demo UX
 		// TrustedProxies empty → RemoteAddr only (spoofed XFF ignored).
 	}
 	layer, err := antibot.New(antibot.NewMemoryStore(), cfg)
@@ -69,122 +66,6 @@ func main() {
 	mux.Handle("/antibot-client.js", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, filepath.Join(mustWD(), "..", "antibot", "client", "antibot-client.js"))
 	}))
-
-	mux.HandleFunc("/api/precheck/issue", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
-			return
-		}
-		_ = antibot.AssertBrowserHeaders(r)
-		var in struct {
-			Capabilities antibot.ClientCapabilities `json:"capabilities"`
-			Browser      antibot.BrowserSignals     `json:"browser"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&in)
-		sess, _, err := antibot.EnsureSessionCookie(w, r, secret, antibot.DefaultSessionCookie, antibot.DefaultSessionTTL)
-		if err != nil {
-			http.Error(w, "session", 500)
-			return
-		}
-		signals := antibot.SignalsFromRequestTrusted(r, sess, trustedProxies)
-		iss, err := layer.PrecheckIssue(r.Context(), antibot.PrecheckIssueRequest{
-			ClientKey:    sess.ClientKey,
-			Signals:      signals,
-			Browser:      in.Browser,
-			Capabilities: in.Capabilities,
-		})
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, map[string]any{
-			"precheck_id":   iss.PrecheckID,
-			"expires_in_ms": iss.ExpiresInMs,
-			"js_challenge":  iss.JSChallenge,
-			"pow":           iss.PoW,
-		})
-	})
-
-	mux.HandleFunc("/api/precheck/verify", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method", http.StatusMethodNotAllowed)
-			return
-		}
-		_ = antibot.AssertBrowserHeaders(r)
-		var in struct {
-			Kind         string                       `json:"kind"`
-			PrecheckID   string                       `json:"precheck_id"`
-			JSResponse   string                       `json:"js_response"`
-			PoWNonce     string                       `json:"pow_nonce"`
-			Browser      antibot.BrowserSignals       `json:"browser"`
-			Interaction  antibot.PrecheckInteraction  `json:"interaction"`
-			Capabilities antibot.ClientCapabilities   `json:"capabilities"`
-		}
-		if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&in); err != nil {
-			http.Error(w, "bad request", 400)
-			return
-		}
-		if in.Kind == "" {
-			in.Kind = "slide"
-		}
-		sess, _, err := antibot.EnsureSessionCookie(w, r, secret, antibot.DefaultSessionCookie, antibot.DefaultSessionTTL)
-		if err != nil {
-			http.Error(w, "session", 500)
-			return
-		}
-		signals := antibot.SignalsFromRequestTrusted(r, sess, trustedProxies)
-
-		pc, err := layer.PrecheckVerify(r.Context(), antibot.PrecheckVerifyRequest{
-			PrecheckID:  in.PrecheckID,
-			ClientKey:   sess.ClientKey,
-			Signals:     signals,
-			Browser:     in.Browser,
-			PoWNonce:    in.PoWNonce,
-			JSResponse:  in.JSResponse,
-			Interaction: in.Interaction,
-		})
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-
-		if err := layer.PreflightIssue(r.Context(), sess.ClientKey, signals); err != nil {
-			writeErr(w, err)
-			return
-		}
-
-		payload, err := generateChallenge(in.Kind, slideCapt, rotCapt)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		iss, err := layer.Issue(r.Context(), antibot.IssueRequest{
-			Kind:         payload.kind,
-			Answer:       payload.answer,
-			ClientKey:    sess.ClientKey,
-			Signals:      signals,
-			Capabilities: in.Capabilities,
-			Browser:      in.Browser,
-		})
-		if err != nil {
-			writeErr(w, err)
-			return
-		}
-		writeJSON(w, map[string]any{
-			"status":        "challenge",
-			"precheck_id":   pc.PrecheckID,
-			"id":            iss.ID,
-			"kind":          in.Kind,
-			"expires_at":    iss.ExpiresAt,
-			"ttl_seconds":   iss.TTLSeconds,
-			"pow":           iss.PoW,
-			"js_challenge":  iss.JSChallenge,
-			"public":        payload.public,
-			"master":        payload.master,
-			payload.tileKey: payload.thumb,
-			"tile":          payload.thumb,
-		})
-	})
 
 	mux.HandleFunc("/api/issue", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -233,16 +114,16 @@ func main() {
 		}
 
 		out := map[string]any{
-			"id":                iss.ID,
-			"kind":              in.Kind,
-			"expires_at":        iss.ExpiresAt,
-			"ttl_seconds":       iss.TTLSeconds,
-			"pow":               iss.PoW,
-			"js_challenge":      iss.JSChallenge,
-			"public":            payload.public,
-			"master":            payload.master,
-			payload.tileKey:     payload.thumb,
-			"tile":              payload.thumb,
+			"id":            iss.ID,
+			"kind":          in.Kind,
+			"expires_at":    iss.ExpiresAt,
+			"ttl_seconds":   iss.TTLSeconds,
+			"pow":           iss.PoW,
+			"js_challenge":  iss.JSChallenge,
+			"public":        payload.public,
+			"master":        payload.master,
+			payload.tileKey: payload.thumb,
+			"tile":          payload.thumb,
 		}
 		writeJSON(w, out)
 	})

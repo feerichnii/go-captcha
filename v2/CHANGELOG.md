@@ -5,10 +5,10 @@ All notable changes to go-captcha v2 (AntiBot + captcha packages) are documented
 ## Unreleased
 
 ### AntiBot checkbox Precheck (P1 UX)
-- Stage 1 `PrecheckIssue` / `PrecheckVerify` (separate record, rates, TTL); `RequirePrecheck` gates Issue
-- Merged demo path: checkbox → precheck → Generate+Issue → auto Verify on pointerup
+- Stage 1 `PrecheckIssue` / `PrecheckVerify` (optional library API; `RequirePrecheck` gates Issue)
+- **Recommended demo UX:** Issue Slide/Rotate first → «Проверить решение» → hidden JS/PoW → `/verify`
 - Precheck failures never trigger geometry freeze / badgeo / epoch
-- Client `runPrecheck` + protocol **2**; telemetry `OnPrecheck`
+- Client `runPrecheck` kept for optional integrators; protocol **2**; telemetry `OnPrecheck`
 - Error codes: `precheck_required`, `precheck_expired`, `unsupported_client`
 
 ### AntiBot P0.2

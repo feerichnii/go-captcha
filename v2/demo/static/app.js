@@ -3,13 +3,12 @@ import {
   TrajectoryTracker,
   collectBrowserSignals,
   solveJSChallenge,
+  solvePoW,
 } from "/antibot-client.js";
 
 const ab = new AntiBotClient({
   issueUrl: "/api/issue",
   verifyUrl: "/api/verify",
-  precheckIssueUrl: "/api/precheck/issue",
-  precheckVerifyUrl: "/api/precheck/verify",
   capabilities: { protocol: 2, pow: ["sha256-v1"] },
 });
 
@@ -80,11 +79,6 @@ function setStatus(card, msg, ok) {
   el.className = "status" + (ok === true ? " ok" : ok === false ? " err" : "");
 }
 
-function setPrecheckHint(card, msg) {
-  const el = $(".precheck-hint", card);
-  if (el) el.textContent = msg || "";
-}
-
 function dataURL(b64) {
   if (!b64) return "";
   if (b64.startsWith("data:")) return b64;
@@ -92,104 +86,63 @@ function dataURL(b64) {
   return `data:${isPng ? "image/png" : "image/jpeg"};base64,${b64}`;
 }
 
-async function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function resetCardUI(card) {
-  card._ch = null;
-  card._verified = false;
-  card._tracker?.stop();
-  card._tracker = null;
-  const interactive = $(".interactive", card);
-  if (interactive) interactive.hidden = true;
-  const check = $(".human-check", card);
-  if (check) {
-    check.checked = false;
-    check.disabled = false;
-    check.classList.remove("success");
+function setVerifyUI(card, { busy, done, label } = {}) {
+  const row = $(".verify-row", card);
+  const box = $(".verify-box", card);
+  const spin = $(".verify-spin", card);
+  const text = $(".verify-label", card);
+  if (label && text) text.textContent = label;
+  if (busy) {
+    row.disabled = true;
+    row.classList.add("busy");
+    row.classList.remove("done");
+    if (spin) spin.hidden = false;
+    if (box) box.classList.remove("checked");
+  } else if (done) {
+    row.disabled = true;
+    row.classList.remove("busy");
+    row.classList.add("done");
+    if (spin) spin.hidden = true;
+    if (box) box.classList.add("checked");
+    if (text) text.textContent = "Проверено";
+  } else {
+    row.disabled = false;
+    row.classList.remove("busy", "done");
+    if (spin) spin.hidden = true;
+    if (box) box.classList.remove("checked");
+    if (text) text.textContent = label || "Проверить решение";
   }
-  const label = $(".checkbox-label", card);
-  if (label) label.textContent = "Я не робот";
-  setPrecheckHint(card, "");
-  setStatus(card, "");
-  ab.resetPrecheck();
 }
 
-function showInteractive(card, ch) {
-  const interactive = $(".interactive", card);
-  interactive.hidden = false;
-  setPrecheckHint(card, "Дополнительная проверка");
-  const check = $(".human-check", card);
-  check.checked = true;
-  check.disabled = true;
-  card._ch = ch;
-  card._pos = { x: 0, y: 0, angle: 0 };
-  renderChallenge(card, ch);
-}
-
-async function onCheckboxClick(card, ev) {
-  const check = $(".human-check", card);
-  if (card._verified) {
-    ev.preventDefault();
-    return;
-  }
+async function issueCard(card) {
+  const kind = card.dataset.kind;
   if (card._lockedUntil && Date.now() < card._lockedUntil) {
-    check.checked = false;
     const left = Math.max(0, card._lockedUntil - Date.now());
-    setStatus(card, `повторите через ${Math.ceil(left / 1000)}с`, false);
+    setStatus(card, `заблокировано, подождите ${Math.ceil(left / 1000)}с`, false);
     return;
   }
-
-  const downMs = card._pointerDownMs || Math.round(nowMs());
-  const upMs = Math.round(nowMs());
-  const row = $(".checkbox-row", card);
-  const rect = row?.getBoundingClientRect?.();
-  const interaction = {
-    pointer_down_ms: downMs,
-    pointer_up_ms: upMs,
-    click_x: ev.clientX && rect ? ev.clientX - rect.left : 0,
-    click_y: ev.clientY && rect ? ev.clientY - rect.top : 0,
-    widget_w: rect?.width || 0,
-    widget_h: rect?.height || 0,
-    had_focus: document.hasFocus?.() ?? true,
-    visible: document.visibilityState !== "hidden",
-  };
-
-  check.disabled = true;
-  check.checked = true;
-  const spin = $(".checkbox-spin", card);
-  if (spin) spin.hidden = false;
-  setPrecheckHint(card, "Проверка…");
-  setStatus(card, "");
-
+  setStatus(card, "загрузка…");
+  setVerifyUI(card, { busy: false, done: false });
+  $(".refresh", card).disabled = true;
+  $(".verify-row", card).disabled = true;
   try {
-    const ch = await ab.runPrecheck({
-      kind: card.dataset.kind,
-      interaction,
-      browser: collectBrowserSignals(),
-    });
-    if (!ch?.id) throw new Error("antibot: no challenge after precheck");
-    showInteractive(card, ch);
+    const ch = await ab.issue({ kind });
+    card._ch = ch;
+    card._pos = { x: 0, y: 0, angle: 0 };
+    card._verified = false;
+    renderChallenge(card, ch);
+    setStatus(card, "");
+    setVerifyUI(card, { busy: false, done: false });
   } catch (e) {
-    check.checked = false;
-    check.disabled = false;
     const retry = Number(e.retry_after_ms || e.data?.retry_after_ms || 0);
-    const code = e.error_code || e.data?.error_code || "";
     if (retry > 0) {
       card._lockedUntil = Date.now() + retry;
-      setStatus(card, `${code || "ошибка"} — повторите через ${Math.ceil(retry / 1000)}с`, false);
-      setTimeout(() => {
-        ab.resetPrecheck();
-        check.disabled = false;
-      }, retry + 50);
+      setStatus(card, `заблокировано (${Math.ceil(retry / 1000)}с)`, false);
     } else {
       setStatus(card, String(e.message || e), false);
-      ab.resetPrecheck();
     }
-    setPrecheckHint(card, "");
   } finally {
-    if (spin) spin.hidden = true;
+    $(".refresh", card).disabled = false;
   }
 }
 
@@ -201,18 +154,6 @@ function renderChallenge(card, ch) {
 
   card._tracker?.stop();
   card._tracker = null;
-  card._autoVerifyBound = false;
-
-  const scheduleVerify = () => {
-    if (card._autoVerifyBound || !card._ch) return;
-    // Debounce double pointerup
-    if (card._verifyScheduled) return;
-    card._verifyScheduled = true;
-    setTimeout(() => {
-      card._verifyScheduled = false;
-      verifyCard(card);
-    }, 120);
-  };
 
   if (kind === "rotate") {
     const thumb = $(".thumb", card);
@@ -260,9 +201,7 @@ function renderChallenge(card, ch) {
     track.addEventListener("pointerup", () => {
       const tr = card._tracker;
       if (tr && tr.events.length < tr.maxEvents) tr.events.push("pointerup");
-      scheduleVerify();
     });
-    track.addEventListener("change", scheduleVerify);
     return;
   }
 
@@ -323,85 +262,82 @@ function renderChallenge(card, ch) {
   track.addEventListener("pointerup", () => {
     const tr = card._tracker;
     if (tr && tr.events.length < tr.maxEvents) tr.events.push("pointerup");
-    scheduleVerify();
   });
-  track.addEventListener("change", scheduleVerify);
 }
 
 async function verifyCard(card) {
   const ch = card._ch;
-  if (!ch || card._verified) return;
-  card._ch = null;
+  if (!ch || card._verified) {
+    if (!ch) setStatus(card, "сначала дождитесь капчи", false);
+    return;
+  }
   const kind = card.dataset.kind;
-  setStatus(card, "проверка…");
+  const tracker = card._tracker;
+  const raw = tracker?.snapshot() || { points: [], events: [] };
+  const pub = ch.public || {};
+  const tileW = pub.width || (kind === "rotate" ? 150 : 60);
+  const tileH = pub.height || tileW;
+  const snap = ensureTrajectory(raw, kind, tileW, tileH);
+  let answer;
+  if (kind === "rotate") {
+    answer = { angle: Math.round(card._pos.angle) };
+  } else {
+    answer = { x: card._pos.x, y: card._pos.y };
+  }
+
+  card._ch = null;
+  setVerifyUI(card, { busy: true, label: "Проверка…" });
+  setStatus(card, "");
+
   try {
-    const tracker = card._tracker;
     tracker?.stop();
-    const raw = tracker?.snapshot() || { points: [], events: [] };
-    const pub = ch.public || {};
-    const tileW = pub.width || (kind === "rotate" ? 150 : 60);
-    const tileH = pub.height || tileW;
-    const snap = ensureTrajectory(raw, kind, tileW, tileH);
 
-    let answer;
-    if (kind === "rotate") {
-      answer = { angle: Math.round(card._pos.angle) };
-    } else {
-      answer = { x: card._pos.x, y: card._pos.y };
-    }
-
+    // Hidden tech gates on verify click: ensure JS/PoW from Issue are solved.
     if (ch.js_challenge && !ch._jsPromise) {
       ch._browser = ch._browser || collectBrowserSignals();
       ch._jsPromise = solveJSChallenge(ch.js_challenge, ch._browser);
+    }
+    if (ch.pow && ch.pow.difficulty > 0 && !ch._powPromise) {
+      ch._powPromise = solvePoW(ch.pow);
     }
 
     const res = await ab.verify(ch, answer, snap);
     if (res.ok) {
       card._verified = true;
-      const check = $(".human-check", card);
-      check.checked = true;
-      check.disabled = true;
-      check.classList.add("success");
-      $(".checkbox-label", card).textContent = "Проверено";
-      setPrecheckHint(card, "");
-      $(".interactive", card).hidden = true;
+      setVerifyUI(card, { done: true });
       setStatus(card, "успех", true);
+      setTimeout(() => issueCard(card), 900);
     } else {
       const retry = Number(res.data?.retry_after_ms || 0);
       const errName = res.data?.error_code || res.data?.error || "";
+      setVerifyUI(card, { busy: false, done: false });
       if (retry > 0) {
         card._lockedUntil = Date.now() + retry;
         setStatus(card, `${errName || "ошибка"} — пауза ${Math.ceil(retry / 1000)}с`, false);
-        setTimeout(() => resetCardUI(card), retry + 50);
+        setTimeout(() => issueCard(card), retry + 50);
       } else {
         setStatus(card, `ошибка (${errName || res.status})`, false);
-        setTimeout(() => resetCardUI(card), 900);
+        setTimeout(() => issueCard(card), 900);
       }
     }
   } catch (e) {
+    setVerifyUI(card, { busy: false, done: false });
     const retry = Number(e.retry_after_ms || e.data?.retry_after_ms || 0);
     if (retry > 0) {
       card._lockedUntil = Date.now() + retry;
       setStatus(card, String(e.message || e), false);
-      setTimeout(() => resetCardUI(card), retry + 50);
+      setTimeout(() => issueCard(card), retry + 50);
     } else {
       setStatus(card, String(e.message || e), false);
-      setTimeout(() => resetCardUI(card), 900);
+      setTimeout(() => issueCard(card), 900);
     }
   }
 }
 
 function wireCard(card) {
-  const check = $(".human-check", card);
-  const row = $(".checkbox-row", card);
-  row?.addEventListener("pointerdown", () => {
-    card._pointerDownMs = Math.round(nowMs());
-  });
-  check.addEventListener("click", (ev) => {
-    ev.preventDefault();
-    onCheckboxClick(card, ev);
-  });
-  resetCardUI(card);
+  $(".refresh", card).addEventListener("click", () => issueCard(card));
+  $(".verify-row", card).addEventListener("click", () => verifyCard(card));
+  issueCard(card);
 }
 
 document.querySelectorAll(".card").forEach(wireCard);

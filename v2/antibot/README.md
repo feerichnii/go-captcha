@@ -6,29 +6,27 @@ This document explains **how decisions are made**, **what is checked**, and **wh
 
 ---
 
-## Two-stage model (checkbox + interactive)
+## Recommended UX (issue-first)
 
 ```text
-[ ] Я не робот  →  Stage 1 Precheck (JS/PoW/risk)  →  Slide/Rotate  →  auto Verify
+Issue Slide/Rotate immediately
+  → user solves (answer + trajectory kept locally)
+  → «Проверить решение»
+  → finish hidden JS/PoW from Issue
+  → POST /verify (tech gates → ClaimGeometry → geometry)
 ```
 
-| Stage | Purpose | Proves human? |
-|-------|---------|----------------|
-| **1 — Precheck** | Session/IP, freeze, rate, risk, JS, PoW, soft click signals | **No** — not final success |
-| **2 — Interactive** | One-shot Slide/Rotate geometry + trajectory | Still a signal, not a proof |
+Do **not** mimic reCAPTCHA’s «Я не робот» as a pre-puzzle gate. A simple verify control is enough:
 
-**Passing Precheck does not by itself prove human presence and does not constitute final CAPTCHA success.**
+- `☐ Проверить решение` → busy spinner → `✓ Проверено` after geometry success.
 
-When `Config.RequirePrecheck` is true (demo default):
+JS/PoW attached at **Issue** are solved when the user clicks verify (client may start them in the background earlier). Server `Verify` already runs PoW/JS **before** `ClaimGeometry`.
 
-1. `PrecheckIssue` → short-lived `PrecheckRecord` (TTL **45s**, not a geometry challenge).
-2. `PrecheckVerify` → consume precheck; set server-side `precheck-passed` (same session + `/32`).
-3. `Issue` → requires consuming `precheck-passed` or returns `ErrPrecheckRequired` / `precheck_required`.
-4. Demo merged UX: `POST /api/precheck/verify` runs PrecheckVerify + Generate + Issue and returns the puzzle.
+### Optional Stage-1 Precheck API
 
-Precheck failures (`pow_invalid`, `js_failed`, expired) raise soft risk / precheck rate — **never** `badgeo++`, geometry freeze, or epoch bump.
+`PrecheckIssue` / `PrecheckVerify` + `RequirePrecheck` remain in the library for integrators who want a separate gate before image generation. The **demo does not use them**. When `RequirePrecheck` is false (default), `Issue` works without a prior precheck.
 
-Invisible skip-after-checkbox is **not** enabled in this path (always Stage 2 after Precheck).
+**Passing Precheck (if enabled) does not prove humanity and is not final CAPTCHA success.**
 
 ---
 
@@ -292,7 +290,7 @@ IP Lua keys share hash tag `{ipHash}` (`…:ip:{hash}:freeze|geo|epoch|active|ch
 | `RiskThreshold` | 0.5 (soft) |
 | `HardRejectScore` | 0 (off) |
 | `StretchPoWRiskMin` | 0 (off) |
-| `RequirePrecheck` | false (demo sets true) |
+| `RequirePrecheck` | false (optional; demo off) |
 | `PrecheckTTL` | 45s |
 | `MinSessionAge` | 2s |
 | `SlidePadding` / `RotatePadding` | 5 |
