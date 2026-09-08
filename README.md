@@ -477,6 +477,28 @@ flowchart LR
   end
 ```
 
+### Checks by stage
+
+```mermaid
+flowchart TB
+  P[Preflight: key IP freeze ratePeek UA] --> G[Generate images]
+  G --> I[Issue: rate risk PoW JS encrypt epoch]
+  I --> B[Browser: puzzle + trajectory]
+  B --> T[Verify tech: bind timing PoW JS piece_down]
+  T -->|fail: challenge KEPT| X[error_code]
+  T -->|ok| C[ClaimGeometry one-shot]
+  C -->|wrong| F[freeze + epoch + badgeo]
+  C -->|correct| OK[success + risk update]
+```
+
+| Stage | Hard | Soft | Fail effect |
+|-------|------|------|-------------|
+| Preflight | key, IP, freeze, rate peek, UA | — | no image CPU |
+| Issue | freeze, rate, UA | risk → PoW/JS | no store |
+| Browser | finish PoW/JS | trajectory | — |
+| Verify tech | bind, timing, PoW, JS, piece_down | traj score | challenge **kept** |
+| Geometry | answer vs secret | risk ± | challenge **consumed**; wrong → freeze |
+
 ```text
 Recommended UX
 ──────────────
@@ -505,7 +527,7 @@ AntiBot layer
 └── Browser client      client/antibot-client.js + optional React/Vue helpers
 ```
 
-Full diagrams (components, sequence, Verify pipeline): **[`v2/antibot/README.md`](v2/antibot/README.md)**.
+Full diagrams (layout, checks table, sequence, Verify pipeline): **[`v2/antibot/README.md`](v2/antibot/README.md)**.
 
 ### Quick start
 ```go
